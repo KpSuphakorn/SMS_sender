@@ -19,6 +19,5 @@ SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
 IMAP_SERVER = os.getenv("IMAP_SERVER")
 RECIPIENT_EMAIL_FOR_TESTING = os.getenv("RECIPIENT_EMAIL_FOR_TESTING")
 
-# --- PDF and Font Settings (not secret, so hardcoded) ---
-PDF_OUTPUT_DIR = "generated_pdfs"
+# --- PDF and Font Settings ---
 THAI_FONT_PATH_NORMAL = "Fonts/THSarabunNew.ttf"
