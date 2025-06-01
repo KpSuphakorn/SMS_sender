@@ -14,7 +14,7 @@ from email.mime.base import MIMEBase
 from email import encoders
 from fpdf import FPDF
 from fastapi import FastAPI, HTTPException, Query, Depends, Header
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional
@@ -22,23 +22,18 @@ from io import BytesIO
 from werkzeug.security import generate_password_hash, check_password_hash
 import config as cfg
 
-# === Init ===
+# === App Initialization ===
 app = FastAPI()
-
-origins = [
-    "http://localhost:3000",       # dev
-    "https://yourdomain.com",      # prod
-]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,             # ✅ กำหนด origin ที่ไว้ใจได้
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
-    allow_methods=["*"],               # ✅ หรือระบุแค่ "GET", "POST"
-    allow_headers=["*"],               # ✅ หรือ ["Authorization", "Content-Type"]
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# === MongoDB ===
+# === MongoDB Initialization ===
 mongo_client = MongoClient(cfg.MONGO_CONNECTION_STRING)
 mongo_db = mongo_client[cfg.MONGO_DATABASE_NAME]
 users_col = mongo_db["users"]
@@ -46,9 +41,9 @@ request_logs_col = mongo_db[cfg.MONGO_REQUESTS_COLLECTION]
 mock_data_col = mongo_db[cfg.MONGO_MOCK_COLLECTION]
 grid_fs = gridfs.GridFS(mongo_db)
 
-# === JWT Settings ===
+# === Settings ===
 JWT_SECRET = os.getenv("JWT_SECRET", "devsecret")
-JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", 60 * 24))  # default 1 day
+JWT_EXPIRE_MINUTES = int(os.getenv("JWT_EXPIRE_MINUTES", 1440))  # default 1 day
 
 # === Pydantic Models ===
 class UserCreate(BaseModel):
@@ -65,7 +60,16 @@ class SenderRequest(BaseModel):
     fields: List[str]
     rows: List[Dict]
 
-# === JWT Utilities ===
+# === Field Labels ===
+FIELD_LABELS = {
+    "sender_name": "ชื่อผู้ส่ง",
+    "mobile_provider": "ค่ายมือถือ",
+    "phone_number": "เบอร์มือถือ",
+    "full_name": "ชื่อ-สกุล",
+    "date": "วันที่"
+}
+
+# === Auth Utilities ===
 def create_access_token(user: dict):
     payload = {
         "sub": str(user["_id"]),
@@ -89,55 +93,38 @@ def get_current_user(authorization: str = Header(...)):
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     token = authorization.split(" ")[1]
     payload = decode_token(token)
-    user = users_col.find_one({"_id": ObjectId(payload["sub"])})
+    user = users_col.find_one({"_id": ObjectId(payload["sub"])});
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     user["id"] = str(user["_id"])
     return user
 
-# === Auth Endpoints ===
+# === Auth Routes ===
 @app.post("/api/user/register")
 def register_user(data: UserCreate):
-    existing_user = users_col.find_one({"email": data.email})
-    if existing_user:
+    if users_col.find_one({"email": data.email}):
         raise HTTPException(status_code=400, detail="อีเมลนี้มีผู้ใช้งานแล้ว")
 
     hashed_password = generate_password_hash(data.password)
-    new_user_data = {
+    user_data = {
         "name": data.name,
         "email": data.email,
         "password": hashed_password,
-        "role": data.role if data.role else "user",
+        "role": data.role,
         "created_at": datetime.datetime.utcnow()
     }
-    result = users_col.insert_one(new_user_data)
-    created_user = users_col.find_one({"_id": result.inserted_id})
-
-    token = create_access_token(created_user)
-
-    return {
-        "id": str(created_user["_id"]),
-        "name": created_user["name"],
-        "email": created_user["email"],
-        "role": created_user.get("role"),
-        "token": token
-    }
+    result = users_col.insert_one(user_data)
+    user = users_col.find_one({"_id": result.inserted_id})
+    token = create_access_token(user)
+    return {"id": str(user["_id"]), "name": user["name"], "email": user["email"], "role": user["role"], "token": token}
 
 @app.post("/api/user/login")
 def login_user(data: UserLogin):
     user = users_col.find_one({"email": data.email})
     if not user or not check_password_hash(user["password"], data.password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-
     token = create_access_token(user)
-
-    return {
-        "id": str(user["_id"]),
-        "name": user["name"],
-        "email": user["email"],
-        "role": user.get("role"),
-        "token": token
-    }
+    return {"id": str(user["_id"]), "name": user["name"], "email": user["email"], "role": user["role"], "token": token}
 
 @app.get("/api/user/logout")
 def logout():
@@ -145,14 +132,9 @@ def logout():
 
 @app.get("/api/user/me")
 def get_me(current_user: dict = Depends(get_current_user)):
-    return {
-        "id": current_user["id"],
-        "name": current_user["name"],
-        "email": current_user["email"],
-        "role": current_user.get("role")
-    }
+    return {"id": current_user["id"], "name": current_user["name"], "email": current_user["email"], "role": current_user.get("role")}
 
-# === Request + Email/PDF ===
+# === PDF & Email Utilities ===
 def generate_custom_pdf_and_store(rows, fields, request_id, date_display):
     pdf = FPDF(orientation='L')
     pdf.add_font('THSarabunNew', '', cfg.THAI_FONT_PATH_NORMAL, uni=True)
@@ -167,7 +149,8 @@ def generate_custom_pdf_and_store(rows, fields, request_id, date_display):
     pdf.ln(5)
 
     for field in fields:
-        pdf.cell(col_width, 10, field, 1)
+        label = FIELD_LABELS.get(field, field)
+        pdf.cell(col_width, 10, label, 1)
     pdf.ln()
 
     for row in rows:
@@ -177,12 +160,12 @@ def generate_custom_pdf_and_store(rows, fields, request_id, date_display):
         pdf.ln()
 
     pdf_bytes = pdf.output(dest='S').encode('latin1')
-    file_id = grid_fs.put(pdf_bytes, filename=f"{request_id}.pdf", request_id=request_id, file_type="sent")
-    return file_id
+    return grid_fs.put(pdf_bytes, filename=f"{request_id}.pdf", request_id=request_id, file_type="sent")
 
 def send_email(subject, body, file_id):
     file_data = grid_fs.get(file_id).read()
     filename = grid_fs.get(file_id).filename
+
     msg = MIMEMultipart()
     msg['From'] = cfg.SENDER_EMAIL
     msg['To'] = cfg.RECIPIENT_EMAIL_FOR_TESTING
@@ -200,6 +183,7 @@ def send_email(subject, body, file_id):
         server.login(cfg.SENDER_EMAIL, cfg.SENDER_PASSWORD)
         server.send_message(msg)
 
+# === Request Routes ===
 @app.post("/request")
 def create_request(data: SenderRequest, current_user: dict = Depends(get_current_user)):
     request_id = str(uuid.uuid4())
@@ -215,7 +199,7 @@ def create_request(data: SenderRequest, current_user: dict = Depends(get_current
         "thai_date": thai_date,
         "fields": data.fields,
         "data": data.rows,
-        "status": "รอข้อมูลตอบกลับ",
+        "status": "pending",
         "pdf_sent_file_id": pdf_file_id,
         "created_by": current_user["id"],
         "created_at": datetime.datetime.now()
@@ -225,26 +209,23 @@ def create_request(data: SenderRequest, current_user: dict = Depends(get_current
 
 @app.get("/requests")
 def get_requests(current_user: dict = Depends(get_current_user)):
-    results = []
-    for doc in request_logs_col.find({"created_by": current_user["id"]}).sort("created_at", -1):
-        results.append({
-            "request_id": doc["request_id"],
-            "thai_date": doc["thai_date"],
-            "status": doc["status"],
-            "pdf_reply_file_id": str(doc.get("pdf_reply_file_id", "")),
-            "pdf_sent_file_id": str(doc.get("pdf_sent_file_id", ""))
-        })
-    return results
+    requests = request_logs_col.find({"created_by": current_user["id"]}).sort("created_at", -1)
+    return [{
+        "request_id": doc["request_id"],
+        "thai_date": doc["thai_date"],
+        "status": doc["status"],
+        "pdf_reply_file_id": str(doc.get("pdf_reply_file_id", "")),
+        "pdf_sent_file_id": str(doc.get("pdf_sent_file_id", ""))
+    } for doc in requests]
 
 @app.get("/pdf/{file_id}")
 def download_pdf(file_id: str, current_user: dict = Depends(get_current_user)):
     try:
         file_obj = grid_fs.get(ObjectId(file_id))
-        filename = file_obj.filename
-        temp_path = f"/tmp/{filename}"
+        temp_path = f"/tmp/{file_obj.filename}"
         with open(temp_path, 'wb') as f:
             f.write(file_obj.read())
-        return FileResponse(temp_path, media_type='application/pdf', filename=filename)
+        return FileResponse(temp_path, media_type='application/pdf', filename=file_obj.filename)
     except:
         raise HTTPException(status_code=404, detail="ไม่พบไฟล์")
 
@@ -254,37 +235,58 @@ def check_inbox_and_save_reply():
     mail.login(cfg.SENDER_EMAIL, cfg.SENDER_PASSWORD)
     mail.select("inbox")
 
-    for request_doc in request_logs_col.find({"status": "รอข้อมูลตอบกลับ"}):
-        request_id = request_doc["request_id"]
-        search_criteria = f'(SUBJECT "{request_id}")'
-        result, data = mail.search(None, search_criteria)
+    for doc in request_logs_col.find({"status": "pending"}):
+        request_id = doc["request_id"]
+        result, data = mail.search(None, f'(SUBJECT "{request_id}")')
         if result != 'OK':
             continue
         for num in data[0].split():
-            result, msg_data = mail.fetch(num, "(RFC822)")
-            if result != 'OK':
-                continue
+            _, msg_data = mail.fetch(num, "(RFC822)")
             msg = email.message_from_bytes(msg_data[0][1])
             if msg["From"] and cfg.SENDER_EMAIL.lower() not in msg["From"].lower():
                 for part in msg.walk():
-                    if part.get_content_maintype() == 'multipart':
-                        continue
-                    if part.get('Content-Disposition') is None:
-                        continue
+                    if part.get_content_maintype() == 'multipart': continue
+                    if part.get('Content-Disposition') is None: continue
                     filename = part.get_filename()
                     if filename and filename.lower().endswith(".pdf"):
                         file_data = part.get_payload(decode=True)
-                        reply_file_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply")
+                        reply_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply")
                         request_logs_col.update_one(
                             {"request_id": request_id},
-                            {"$set": {"status": "ได้รับข้อมูลตอบกลับแล้ว", "pdf_reply_file_id": reply_file_id}}
+                            {"$set": {"status": "received", "pdf_reply_file_id": reply_id}}
                         )
-                        print(f"📥 บันทึกไฟล์ตอบกลับ: {filename}")
                         break
 
     mail.logout()
     return {"message": "ตรวจสอบอีเมลเรียบร้อย"}
 
-@app.get("/mock-data")
-def get_mock_data(date: str = Query(...)):
-    return list(mock_data_col.find({"date": date}, {"_id": 0}))
+@app.get("/available-senders")
+def get_available_senders(start: Optional[str] = Query(None), end: Optional[str] = Query(None)):
+    today = datetime.date.today()
+    query = {}
+
+    if start:
+        try:
+            start_date = datetime.datetime.strptime(start, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง ควรใช้ YYYY-MM-DD")
+    if end:
+        try:
+            end_date = datetime.datetime.strptime(end, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง ควรใช้ YYYY-MM-DD")
+
+    if start and end:
+        if start_date > end_date:
+            raise HTTPException(status_code=400, detail="วันที่เริ่มต้นต้องน้อยกว่าหรือเท่ากับวันที่สิ้นสุด")
+        if end_date > today:
+            raise HTTPException(status_code=400, detail="วันที่สิ้นสุดต้องไม่มากกว่าวันปัจจุบัน")
+        query["date"] = {"$gte": start, "$lte": end}
+    elif start:
+        query["date"] = {"$gte": start}
+    elif end:
+        if end_date > today:
+            raise HTTPException(status_code=400, detail="วันที่สิ้นสุดต้องไม่มากกว่าวันปัจจุบัน")
+        query["date"] = {"$lte": end}
+
+    return list(mock_data_col.find(query, {"_id": 0}))

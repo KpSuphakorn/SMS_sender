@@ -1,11 +1,13 @@
-// src/app/page.tsx
 "use client";
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { signOut, getSession } from "next-auth/react";
 import createRequest from "@/libs/createRequest";
-import getMockData from "@/libs/getMockData";
+import getAvailableSenders from "@/libs/getAvailableSenders";
+import FieldSelector from "@/components/FieldSelector";
+import SenderTable from "@/components/SenderTable";
+import Datepicker from "@/components/DatePicker";
 import { Sender } from "../../interface";
 
 const fieldLabels: Record<keyof Sender, string> = {
@@ -13,7 +15,7 @@ const fieldLabels: Record<keyof Sender, string> = {
   mobile_provider: "ค่ายมือถือ",
   phone_number: "เบอร์มือถือ",
   full_name: "ชื่อ-สกุล",
-  date: "วันที่"
+  date: "วันที่",
 };
 
 const allFields = Object.keys(fieldLabels) as (keyof Sender)[];
@@ -21,31 +23,33 @@ const allFields = Object.keys(fieldLabels) as (keyof Sender)[];
 export default function DashboardPage() {
   const router = useRouter();
   const today = new Date().toISOString().split("T")[0];
-  const [startDate, setStartDate] = useState<string>(today);
-  const [endDate, setEndDate] = useState<string>(today);
+  const [startDate, setStartDate] = useState<string>("");
+  const [endDate, setEndDate] = useState<string>("");
   const [senders, setSenders] = useState<Sender[]>([]);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const [selectedFields, setSelectedFields] = useState<Set<string>>(new Set(allFields));
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    const dates: string[] = [];
-    let current = new Date(startDate);
-    const end = new Date(endDate);
-
-    while (current <= end) {
-      dates.push(current.toISOString().split("T")[0]);
-      current.setDate(current.getDate() + 1);
+  const fetchData = async () => {
+    try {
+      let data;
+      if (!startDate && !endDate) {
+        // ถ้าไม่ได้เลือกช่วง → ดึงทั้งหมด
+        data = await getAvailableSenders();
+      } else {
+        // ดึงตามช่วงที่ระบุ
+        data = await getAvailableSenders(startDate, endDate);
+      }
+      setSenders(data);
+    } catch (err) {
+      console.error("โหลดข้อมูล senders ล้มเหลว", err);
     }
+  };
 
-    Promise.all(dates.map((d) => getMockData(d)))
-      .then((results) => {
-        setSenders(results.flat());
-      })
-      .catch((err) => {
-        console.error("โหลดข้อมูล mock ล้มเหลว", err);
-      });
-  }, [startDate, endDate]);
+  fetchData();
+}, [startDate, endDate]);
+
 
   const toggleRow = (index: number) => {
     setSelectedRows((prev) => {
@@ -65,7 +69,10 @@ export default function DashboardPage() {
 
   const handleSubmit = async () => {
     const selectedData = Array.from(selectedRows).map((i) => senders[i]);
-    if (!selectedData.length || !selectedFields.size) return alert("กรุณาเลือกข้อมูลและ field");
+    if (!selectedData.length || !selectedFields.size) {
+      alert("กรุณาเลือกข้อมูลและ field");
+      return;
+    }
 
     const session = await getSession();
     const token = session?.user.token;
@@ -77,10 +84,13 @@ export default function DashboardPage() {
 
     setLoading(true);
     try {
-      const res = await createRequest({
-        fields: Array.from(selectedFields),
-        rows: selectedData
-      }, token);
+      const res = await createRequest(
+        {
+          fields: Array.from(selectedFields),
+          rows: selectedData,
+        },
+        token
+      );
       alert("ส่งคำขอเรียบร้อย\nRequest ID: " + res.request_id);
     } catch (err) {
       console.error(err);
@@ -96,88 +106,65 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-4">
-        <h1 className="text-2xl font-bold">📋 ส่งคำขอข้อมูลจาก Sender</h1>
+    <div className="p-6 max-w-screen-xl mx-auto">
+      <div className="flex justify-between items-center mb-6">
+  <h1 className="text-2xl font-bold">📋 ส่งคำขอข้อมูลจาก Sender</h1>
+  
+  <div className="flex space-x-4">
+    <button
+      onClick={() => router.push("/history")}
+      className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
+    >
+      ดูประวัติคำขอ
+    </button>
+
+    <button
+      onClick={handleLogout}
+      className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+    >
+      ออกจากระบบ
+    </button>
+  </div>
+</div>
+
+
+      <div className="bg-white shadow rounded-lg p-4 mb-6">
+        <Datepicker
+          startDate={startDate}
+          endDate={endDate}
+          setStartDate={setStartDate}
+          setEndDate={setEndDate}
+        />
+      </div>
+
+      <div className="bg-white shadow rounded-lg p-4 mb-6">
+        <FieldSelector
+          allFields={allFields}
+          fieldLabels={fieldLabels}
+          selectedFields={selectedFields}
+          onToggle={toggleField}
+        />
+      </div>
+
+      <div className="bg-white shadow rounded-lg p-4 mb-6">
+        <SenderTable
+          senders={senders}
+          allFields={allFields}
+          fieldLabels={fieldLabels}
+          selectedRows={selectedRows}
+          onToggleRow={toggleRow}
+        />
+      </div>
+
+      <div className="flex justify-end">
         <button
-          onClick={handleLogout}
-          className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
+          className="px-6 py-2 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 disabled:opacity-50"
+          onClick={handleSubmit}
+          disabled={loading}
         >
-          ออกจากระบบ
+          {loading ? "กำลังส่ง..." : "✅ ส่งคำขอ"}
         </button>
       </div>
-
-      <div className="mb-4 flex gap-4">
-        <div>
-          <label className="font-medium">วันที่เริ่มต้น:</label>
-          <input
-            type="date"
-            value={startDate}
-            onChange={(e) => setStartDate(e.target.value)}
-            className="border px-2 py-1 ml-2"
-          />
-        </div>
-        <div>
-          <label className="font-medium">วันที่สิ้นสุด:</label>
-          <input
-            type="date"
-            value={endDate}
-            onChange={(e) => setEndDate(e.target.value)}
-            className="border px-2 py-1 ml-2"
-          />
-        </div>
-      </div>
-
-      <div className="mb-4">
-        <label className="font-medium">เลือก Field ที่ต้องการส่ง:</label>
-        <div className="flex gap-4 flex-wrap mt-2">
-          {allFields.map((field) => (
-            <label key={field} className="flex items-center gap-1">
-              <input
-                type="checkbox"
-                checked={selectedFields.has(field)}
-                onChange={() => toggleField(field)}
-              />
-              {fieldLabels[field]}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <table className="w-full border">
-        <thead>
-          <tr className="bg-gray-100">
-            <th className="p-2 border">เลือก</th>
-            {allFields.map((f) => (
-              <th key={f} className="p-2 border">{fieldLabels[f]}</th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {senders.map((sender, index) => (
-            <tr key={index}>
-              <td className="p-2 border text-center">
-                <input
-                  type="checkbox"
-                  checked={selectedRows.has(index)}
-                  onChange={() => toggleRow(index)}
-                />
-              </td>
-              {allFields.map((f) => (
-                <td key={f} className="p-2 border">{sender[f]}</td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
-      <button
-        className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
-        onClick={handleSubmit}
-        disabled={loading}
-      >
-        {loading ? "กำลังส่ง..." : "✅ ส่งคำขอ"}
-      </button>
     </div>
   );
 }
