@@ -8,6 +8,7 @@ import getAvailableSenders from "@/libs/getAvailableSenders";
 import FieldSelector from "@/components/FieldSelector";
 import SenderTable from "@/components/SenderTable";
 import Datepicker from "@/components/DatePicker";
+import NotificationBell from "@/components/NotificationBell";
 import { Sender } from "../../interface";
 
 const fieldLabels: Record<keyof Sender, string> = {
@@ -107,10 +108,13 @@ export default function DashboardPage() {
 
   return (
     <div className="p-6 max-w-screen-xl mx-auto">
-      <div className="flex justify-between items-center mb-6">
+      
+<div className="flex justify-between items-center mb-6">
   <h1 className="text-2xl font-bold">📋 ส่งคำขอข้อมูลจาก Sender</h1>
-  
-  <div className="flex space-x-4">
+
+  <div className="flex items-center space-x-4">
+    <NotificationBell /> {/* 👈 กระดิ่งอยู่ซ้ายสุดของกลุ่มปุ่ม */}
+    
     <button
       onClick={() => router.push("/history")}
       className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
