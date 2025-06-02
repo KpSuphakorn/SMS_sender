@@ -1,7 +1,17 @@
-# SMS_sender
+## SMS_sender
 
-Backend
+### Backend
+วิธีติดตั้ง
+pip install -r requirements.txt
+
+วิธีรัน
 uvicorn main:app --reload
 
-Frontend
+
+
+### Frontend
+วิธีติดตั้ง
+pip install
+
+วิธีรัน
 npm run dev
