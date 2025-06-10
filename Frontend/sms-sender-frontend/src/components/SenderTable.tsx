@@ -23,13 +23,15 @@ export default function SenderTable({
         {senders.map((sender, index) => (
           <div
             key={index}
-            className="grid grid-cols-[60px_repeat(auto-fit,minmax(120px,1fr))] items-center px-4 py-3 border-t border-gray-100 bg-white hover:bg-gray-50 transition"
+            className="grid grid-cols-[60px_repeat(auto-fit,minmax(120px,1fr))] items-center px-4 py-3 border-t border-gray-100 bg-white hover:bg-gray-50 transition cursor-pointer"
+            onClick={() => onToggleRow(index)}
           >
             <div className="text-center">
               <input
                 type="checkbox"
                 checked={selectedRows.has(index)}
                 onChange={() => onToggleRow(index)}
+                onClick={(e) => e.stopPropagation()}
                 className="w-4 h-4"
               />
             </div>
