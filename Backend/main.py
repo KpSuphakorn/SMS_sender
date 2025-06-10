@@ -126,8 +126,14 @@ def generate_custom_pdf_and_store(rows, fields, request_id, date_display):
             pdf.cell(col_width, 10, value, 1)
         pdf.ln()
 
-    pdf_bytes = pdf.output(dest='S').encode('latin1')
-    return grid_fs.put(pdf_bytes, filename=f"{request_id}.pdf", request_id=request_id, file_type="sent")
+    pdf_stream = BytesIO(pdf.output(dest='S'))
+
+    return grid_fs.put(
+        pdf_stream,
+        filename=f"{request_id}.pdf",
+        request_id=request_id,
+        file_type="sent"
+    )
 
 def send_email(subject, body, file_id):
     file_data = grid_fs.get(file_id).read()
