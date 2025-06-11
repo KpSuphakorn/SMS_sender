@@ -1,4 +1,3 @@
-# === Imports ===
 import os
 import smtplib
 import imaplib
@@ -41,6 +40,7 @@ mongo_db = mongo_client[cfg.MONGO_DATABASE_NAME]
 users_col = mongo_db["users"]
 request_logs_col = mongo_db[cfg.MONGO_REQUESTS_COLLECTION]
 mock_data_col = mongo_db[cfg.MONGO_MOCK_COLLECTION]
+notifications_col = mongo_db["notifications"]
 grid_fs = gridfs.GridFS(mongo_db)
 
 # === Settings ===
@@ -55,6 +55,9 @@ FIELD_LABELS = {
     "full_name": "ชื่อ-สกุล",
     "date": "วันที่"
 }
+
+# === Status Enum ===
+ALLOWED_STATUSES = ["pending", "received", "suspension_requested", "suspended"]
 
 # === Pydantic Models ===
 class UserCreate(BaseModel):
@@ -127,42 +130,86 @@ def generate_custom_pdf_and_store(rows, fields, request_id, date_display):
         pdf.ln()
 
     pdf_stream = BytesIO(pdf.output(dest='S'))
-
     return grid_fs.put(
         pdf_stream,
-        filename=f"{request_id}.pdf",
+        filename=f"{request_id}_data.pdf",
         request_id=request_id,
-        file_type="sent"
+        file_type="sent_data"
     )
 
-def send_email(subject, body, file_id):
-    file_data = grid_fs.get(file_id).read()
-    filename = grid_fs.get(file_id).filename
+def generate_suspension_pdf(request_id: str, date_display, recipient="เจ้าหน้าที่ผู้เกี่ยวข้อง"):
+    pdf = FPDF()
+    pdf.add_font('THSarabunNew', '', cfg.THAI_FONT_PATH_NORMAL, uni=True)
+    pdf.set_font('THSarabunNew', '', 16)
+    pdf.add_page()
 
+    pdf.cell(0, 10, f"เรียน {recipient}", 0, 1)
+    pdf.ln(10)
+    pdf.multi_cell(0, 10, f"ขอให้ดำเนินการระงับสัญญาณตามข้อมูลในเอกสารแนบ (Request ID: {request_id})")
+    pdf.ln(10)
+    pdf.cell(0, 10, "ด้วยความเคารพ", 0, 1)
+    pdf.cell(0, 10, "ผู้ยื่นคำขอ", 0, 1)
+    pdf.ln(10)
+    pdf.set_text_color(255, 0, 0)  # Red color for date
+    pdf.cell(0, 10, f"วันที่: {date_display}", 0, 1)
+
+    pdf_stream = BytesIO(pdf.output(dest='S'))
+    return grid_fs.put(
+        pdf_stream,
+        filename=f"{request_id}_suspension.pdf",
+        request_id=request_id,
+        file_type="sent_suspension"
+    )
+
+def send_email(subject, body, file_ids):
     msg = MIMEMultipart()
     msg['From'] = cfg.SENDER_EMAIL
     msg['To'] = cfg.RECIPIENT_EMAIL_FOR_TESTING
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
-    part = MIMEBase('application', 'octet-stream')
-    part.set_payload(file_data)
-    encoders.encode_base64(part)
-    part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
-    msg.attach(part)
+    for file_id in file_ids:
+        file_data = grid_fs.get(file_id).read()
+        filename = grid_fs.get(file_id).filename
+        part = MIMEBase('application', 'octet-stream')
+        part.set_payload(file_data)
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
+        msg.attach(part)
 
     with smtplib.SMTP(cfg.SMTP_SERVER, cfg.SMTP_PORT) as server:
         server.starttls()
         server.login(cfg.SENDER_EMAIL, cfg.SENDER_PASSWORD)
         server.send_message(msg)
 
+def create_notification(request_id: str, status: str, user_id: str, thai_date: str):
+    return notifications_col.insert_one({
+        "request_id": request_id,
+        "status": status,
+        "user_id": user_id,
+        "is_read": False,
+        "thai_date": thai_date,
+        "created_at": datetime.datetime.now()
+    })
+
 def check_inbox_and_save_reply():
     mail = imaplib.IMAP4_SSL(cfg.IMAP_SERVER)
     mail.login(cfg.SENDER_EMAIL, cfg.SENDER_PASSWORD)
     mail.select("inbox")
 
-    for doc in request_logs_col.find({"status": "pending"}):
+    for doc in request_logs_col.find({"status": {"$in": ["pending", "suspension_requested"]}}):
         request_id = doc["request_id"]
+        thai_date = doc["thai_date"]
+        user_id = doc["created_by"]
+        
+        # ตรวจสอบว่า notification สำหรับ "received" มีอยู่แล้วหรือไม่
+        existing_notification = notifications_col.find_one({
+            "request_id": request_id,
+            "status": "received"
+        })
+        if existing_notification:
+            continue  # ข้ามหาก notification สำหรับ "received" มีอยู่แล้ว
+
         result, data = mail.search(None, f'(SUBJECT "{request_id}")')
         if result != 'OK':
             continue
@@ -174,19 +221,26 @@ def check_inbox_and_save_reply():
                     if part.get_content_maintype() == 'multipart': continue
                     if part.get('Content-Disposition') is None: continue
                     filename = part.get_filename()
-                    if filename and filename.lower().endswith(".pdf"):
+                    if filename and filename.lower().endswith((".csv", ".xlsx")):
                         file_data = part.get_payload(decode=True)
                         reply_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply")
                         request_logs_col.update_one(
                             {"request_id": request_id},
-                            {"$set": {"status": "received", "pdf_reply_file_id": reply_id}}
+                            {
+                                "$addToSet": {"status": "received"},
+                                "$set": {
+                                    "reply_file_id": reply_id,
+                                    "updated_at": datetime.datetime.now()
+                                }
+                            }
                         )
+                        create_notification(request_id, "received", user_id, thai_date)
+                        # ทำเครื่องหมายอีเมลว่า "อ่านแล้ว"
+                        mail.store(num, '+FLAGS', '\\Seen')
                         break
-
     mail.logout()
 
 # === API Endpoints ===
-
 @app.post("/api/user/register")
 def register_user(data: UserCreate):
     if users_col.find_one({"email": data.email}):
@@ -221,23 +275,25 @@ def logout():
 def get_me(current_user: dict = Depends(get_current_user)):
     return {"id": current_user["id"], "name": current_user["name"], "email": current_user["email"], "role": current_user.get("role")}
 
-@app.post("/request")
+@app.post("/api/request")
 def create_request(data: SenderRequest, current_user: dict = Depends(get_current_user)):
     request_id = str(uuid.uuid4())
     thai_date = datetime.datetime.now().strftime("%d %B %Y")
-    pdf_file_id = generate_custom_pdf_and_store(data.rows, data.fields, request_id, thai_date)
+    data_pdf_id = generate_custom_pdf_and_store(data.rows, data.fields, request_id, thai_date)
+    suspension_pdf_id = generate_suspension_pdf(request_id, thai_date)
 
-    subject = f"ขอข้อมูล (Request ID: {request_id})"
-    body = f"เรียนเจ้าหน้าที่\n\nRequest ID: {request_id}\nวันที่: {thai_date}\n(กรุณาตอบกลับพร้อมแนบไฟล์ข้อมูล)"
-    send_email(subject, body, pdf_file_id)
+    subject = f"ขอข้อมูลและระงับสัญญาณ (Request ID: {request_id})"
+    body = f"เรียนเจ้าหน้าที่\n\nRequest ID: {request_id}\nวันที่: {thai_date}\nกรุณาดำเนินการระงับสัญญาณตามเอกสารแนบและส่งข้อมูลกลับในรูปแบบ Excel/CSV"
+    send_email(subject, body, [data_pdf_id, suspension_pdf_id])
 
     request_logs_col.insert_one({
         "request_id": request_id,
         "thai_date": thai_date,
         "fields": data.fields,
         "data": data.rows,
-        "status": "pending",
-        "pdf_sent_file_id": pdf_file_id,
+        "status": ["pending", "suspension_requested"],
+        "pdf_sent_data_id": data_pdf_id,
+        "pdf_sent_suspension_id": suspension_pdf_id,
         "created_by": current_user["id"],
         "created_at": datetime.datetime.now(),
         "read_by": []
@@ -245,44 +301,80 @@ def create_request(data: SenderRequest, current_user: dict = Depends(get_current
 
     return {"message": "ส่งคำขอเรียบร้อย", "request_id": request_id}
 
-@app.post("/request/mark-read/{request_id}")
-def mark_read(request_id: str, current_user: dict = Depends(get_current_user)):
-    user_id = current_user["id"]
+@app.post("/api/notification/mark-read/{notification_id}")
+def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
+    result = notifications_col.update_one(
+        {"_id": ObjectId(notification_id), "user_id": current_user["id"]},
+        {"$set": {"is_read": True, "updated_at": datetime.datetime.now()}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    if result.modified_count == 0:
+        return {"message": "Notification already marked as read"}
+    return {"message": "Marked as read"}
+
+@app.post("/api/request/complete-suspension/{request_id}")
+def complete_suspension(request_id: str):
+    doc = request_logs_col.find_one({"request_id": request_id})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Request not found")
     result = request_logs_col.update_one(
         {"request_id": request_id},
-        {"$addToSet": {"read_by": user_id}}
+        {
+            "$addToSet": {"status": "suspended"},
+            "$set": {
+                "updated_at": datetime.datetime.now(),
+                "suspended_at": datetime.datetime.now()
+            }
+        }
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Request not found")
     if result.modified_count == 0:
-        return {"message": "Request already marked as read"}
-    return {"message": "Marked as read"}
+        return {"message": "Request already marked as suspended"}
+    create_notification(request_id, "suspended", doc["created_by"], doc["thai_date"])
+    return {"message": "Suspension completed"}
 
-@app.get("/requests")
+@app.get("/api/notifications")
+def get_notifications(current_user: dict = Depends(get_current_user)):
+    notifications = notifications_col.find({"user_id": current_user["id"]}).sort("created_at", -1)
+    return [{
+        "notification_id": str(doc["_id"]),
+        "request_id": doc["request_id"],
+        "status": doc["status"],
+        "thai_date": doc["thai_date"],
+        "is_read": doc["is_read"],
+        "created_at": doc["created_at"]
+    } for doc in notifications]
+
+@app.get("/api/requests")
 def get_requests(current_user: dict = Depends(get_current_user)):
     requests = request_logs_col.find({"created_by": current_user["id"]}).sort("created_at", -1)
     return [{
         "request_id": doc["request_id"],
         "thai_date": doc["thai_date"],
         "status": doc["status"],
-        "pdf_reply_file_id": str(doc.get("pdf_reply_file_id", "")),
-        "pdf_sent_file_id": str(doc.get("pdf_sent_file_id", "")),
+        "reply_file_id": str(doc.get("reply_file_id", "")),
+        "pdf_sent_data_id": str(doc.get("pdf_sent_data_id", "")),
+        "pdf_sent_suspension_id": str(doc.get("pdf_sent_suspension_id", "")),
         "is_read": current_user["id"] in doc.get("read_by", []),
         "read_by": doc.get("read_by", [])
     } for doc in requests]
 
-@app.get("/pdf/{file_id}")
-def download_pdf(file_id: str, current_user: dict = Depends(get_current_user)):
+@app.get("/api/file/{file_id}")
+def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
     try:
         file_obj = grid_fs.get(ObjectId(file_id))
         temp_path = f"/tmp/{file_obj.filename}"
         with open(temp_path, 'wb') as f:
             f.write(file_obj.read())
-        return FileResponse(temp_path, media_type='application/pdf', filename=file_obj.filename)
+        media_type = 'application/pdf' if file_obj.filename.endswith('.pdf') else \
+                     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if file_obj.filename.endswith('.xlsx') else 'text/csv'
+        return FileResponse(temp_path, media_type=media_type, filename=file_obj.filename)
     except:
         raise HTTPException(status_code=404, detail="ไม่พบไฟล์")
 
-@app.get("/available-senders")
+@app.get("/api/available-senders")
 def get_available_senders(start: Optional[str] = Query(None), end: Optional[str] = Query(None)):
     today = datetime.date.today()
     query = {}

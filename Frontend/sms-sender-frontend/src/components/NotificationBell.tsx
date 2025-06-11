@@ -2,33 +2,30 @@
 
 import { useEffect, useState } from "react";
 import { Bell } from "lucide-react";
-import getRequestList from "@/libs/getRequestList";
 import { getSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
-import markRequestAsRead from "@/libs/markRequestAsRead";
+import getNotifications from "@/libs/getNotification";
+import markNotificationAsRead from "@/libs/markRequestAsRead";
 
 export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [notis, setNotis] = useState<any[]>([]);
-  const router = useRouter();
 
-  const fetchData = async () => {
+  const fetchNotifications = async () => {
     const session = await getSession();
     const token = session?.user.token;
     if (!token) return;
 
     try {
-      const all = await getRequestList(token);
-      const received = all.filter((req: any) => req.status === "received");
-      setNotis(received);
+      const data = await getNotifications(token);
+      setNotis(data);
     } catch (err) {
       console.error("โหลดแจ้งเตือนไม่สำเร็จ", err);
     }
   };
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 10000);
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -44,9 +41,18 @@ export default function NotificationBell() {
       if (!token) return;
 
       const unread = notis.filter((n) => !n.is_read);
-      await Promise.all(unread.map((n) => markRequestAsRead(n.request_id, token)));
-      await fetchData();
+      await Promise.all(
+        unread.map((n) => markNotificationAsRead(n.notification_id, token))
+      );
+      await fetchNotifications();
     }
+  };
+
+  const getStatusDisplay = (status: string) => {
+    if (status === "suspended") return "ระงับสัญญาณแล้ว";
+    if (status === "suspension_requested") return "ร้องขอระงับสัญญาณ";
+    if (status === "received") return "ได้รับข้อมูล";
+    return "กำลังขอข้อมูล";
   };
 
   return (
@@ -61,21 +67,33 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-64 bg-white border rounded shadow z-50 max-h-64 overflow-y-auto">
+        <div className="absolute right-0 mt-2 w-80 bg-white border rounded shadow z-50 max-h-96 overflow-y-auto">
           <div className="p-2 font-semibold border-b">การแจ้งเตือน</div>
           {notis.length === 0 ? (
-            <div className="p-2 text-gray-500">ยังไม่มีการตอบกลับ</div>
+            <div className="p-2 text-gray-500">ยังไม่มีการตอบกลับหรือการระงับสัญญาณ</div>
           ) : (
             notis.map((n) => (
               <div
-                key={n.request_id}
-                className={`p-2 text-sm ${
+                key={n.notification_id}
+                className={`p-3 text-sm ${
                   n.is_read
                     ? "bg-gray-100 text-gray-500"
                     : "bg-white font-medium"
                 }`}
               >
-                📩 ได้รับข้อมูลสำหรับ {n.request_id}
+                <div className="flex flex-col">
+                  <div>
+                    📩 {getStatusDisplay(n.status)} (ID: {n.request_id})
+                  </div>
+                  <div className="text-xs text-gray-400 mt-1">
+                    วันที่: {n.thai_date}
+                  </div>
+                  {n.status === "suspended" && (
+                    <div className="text-green-500 text-xs mt-1">
+                      ดำเนินการระงับโดย กสทช. เรียบร้อย
+                    </div>
+                  )}
+                </div>
               </div>
             ))
           )}

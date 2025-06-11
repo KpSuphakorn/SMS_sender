@@ -2,7 +2,7 @@
 
 export default async function createRequest(postData: any, token: string) {
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
-  const response = await fetch(`${BACKEND_URL}/request`, {
+  const response = await fetch(`${BACKEND_URL}/api/request`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

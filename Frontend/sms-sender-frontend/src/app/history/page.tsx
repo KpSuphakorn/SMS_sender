@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { getSession } from "next-auth/react";
 import getRequestList from "@/libs/getRequestList";
-import downloadPdf from "@/libs/downloadPdf";
+import downloadFile from "@/libs/downloadFile";
 import Datepicker from "@/components/DatePicker";
 import RequestStatus from "@/components/RequestStatus";
 import { RequestLog } from "../../../interface";
@@ -49,16 +49,18 @@ export default function HistoryPage() {
     setFilteredLogs(filtered);
   }, [startDate, endDate, logs]);
 
-  const handleDownload = async (fileId: string) => {
+  const handleDownload = async (fileId: string, isPdf: boolean) => {
     if (!token) return alert("กรุณาเข้าสู่ระบบใหม่");
 
     try {
-      const blob = await downloadPdf(fileId, token);
+      const { blob, filename } = await downloadFile(fileId, token, isPdf);
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `document_${fileId}.pdf`;
+      link.download = filename;
+      document.body.appendChild(link);
       link.click();
+      document.body.removeChild(link);
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error(err);
@@ -86,40 +88,51 @@ export default function HistoryPage() {
               <th className="px-4 py-3 text-left">📅 วันที่</th>
               <th className="px-4 py-3 text-left">🆔 Request ID</th>
               <th className="px-4 py-3 text-left">📌 สถานะ</th>
-              <th className="px-4 py-3 text-center">📤 PDF ส่ง</th>
-              <th className="px-4 py-3 text-center">📥 PDF ตอบกลับ</th>
+              <th className="px-4 py-3 text-center">📤 ไฟล์ที่ส่ง</th>
+              <th className="px-4 py-3 text-center">📥 ไฟล์ตอบกลับ</th>
             </tr>
           </thead>
           <tbody className="text-sm text-gray-800">
             {filteredLogs.map((log, i) => (
-                <tr
-                  key={i}
-                  className={i % 2 === 0 ? "bg-white" : "bg-gray-50 border-t border-gray-100"}
-                >
+              <tr
+                key={i}
+                className={i % 2 === 0 ? "bg-white" : "bg-gray-50 border-t border-gray-100"}
+              >
                 <td className="px-4 py-3">{log.thai_date}</td>
                 <td className="px-4 py-3">{log.request_id}</td>
                 <td className="px-4 py-3">
                   <RequestStatus status={log.status} />
                 </td>
                 <td className="px-4 py-3 text-center">
-                  {log.pdf_sent_file_id && (
-                    <button
-                      onClick={() => handleDownload(log.pdf_sent_file_id!)}
-                      className="inline-flex items-center text-blue-600 hover:underline"
-                    >
-                      <Download className="w-4 h-4 mr-1" />
-                      ดาวน์โหลด
-                    </button>
-                  )}
+                  <div className="flex flex-col gap-1">
+                    {log.pdf_sent_data_id && (
+                      <button
+                        onClick={() => handleDownload(log.pdf_sent_data_id!, true)}
+                        className="inline-flex items-center text-blue-600 hover:underline"
+                      >
+                        <Download className="w-4 h-4 mr-1" />
+                        PDF ข้อมูล
+                      </button>
+                    )}
+                    {log.pdf_sent_suspension_id && (
+                      <button
+                        onClick={() => handleDownload(log.pdf_sent_suspension_id!, true)}
+                        className="inline-flex items-center text-blue-600 hover:underline"
+                      >
+                        <Download className="w-4 h-4 mr-1" />
+                        PDF คำร้องระงับ
+                      </button>
+                    )}
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-center">
-                  {log.pdf_reply_file_id ? (
+                  {log.reply_file_id ? (
                     <button
-                      onClick={() => handleDownload(log.pdf_reply_file_id!)}
+                      onClick={() => handleDownload(log.reply_file_id!, false)}
                       className="inline-flex items-center text-green-600 hover:underline"
                     >
                       <Download className="w-4 h-4 mr-1" />
-                      ดาวน์โหลด
+                      Excel/CSV
                     </button>
                   ) : (
                     <span className="text-gray-400">-</span>

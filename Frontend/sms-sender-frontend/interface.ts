@@ -31,7 +31,10 @@ export interface DatepickerProps {
 export interface RequestLog {
   request_id: string;
   thai_date: string;
-  status: string;
-  pdf_sent_file_id?: string;
-  pdf_reply_file_id?: string;
+  status: string[];
+  pdf_sent_data_id?: string;
+  pdf_sent_suspension_id?: string;
+  reply_file_id?: string;
+  is_read: boolean;
+  read_by: string[];
 }

@@ -1,32 +1,29 @@
 interface RequestStatusProps {
-  status: string; // eng status from backend
+  status: string[];
 }
 
 // Mapping แสดงชื่อสถานะภาษาไทย
 const statusMap: Record<string, string> = {
   pending: "กำลังขอข้อมูล",
-  received: "ได้รับข้อมูลแล้ว",
-  pending_suspension: "กำลังขอระงับสัญญาณ",
-  suspended: "ระงับสำเร็จ",
+  received: "ได้รับข้อมูล",
+  suspension_requested: "ร้องขอระงับสัญญาณ",
+  suspended: "ระงับสัญญาณแล้ว",
 };
 
 // ลำดับสถานะตาม flow
 const statusOrder = [
   "pending",
   "received",
-  "pending_suspension",
+  "suspension_requested",
   "suspended",
 ];
 
 export default function RequestStatus({ status }: RequestStatusProps) {
-  // หา index ของสถานะปัจจุบัน
-  const currentIndex = statusOrder.indexOf(status);
-
   return (
     <div className="flex flex-col items-start gap-1">
-      {statusOrder.map((st, i) => (
+      {statusOrder.map((st) => (
         <div key={st}>
-          {i <= currentIndex ? "✓" : "✗"} {statusMap[st]}
+          {status.includes(st) ? "✓" : "✗"} {statusMap[st]}
         </div>
       ))}
     </div>

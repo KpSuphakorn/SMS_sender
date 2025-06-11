@@ -7,7 +7,7 @@ export default async function getAvailableSenders(start?: string, end?: string) 
   if (start) params.append("start", start);
   if (end) params.append("end", end);
 
-  const url = `${BACKEND_URL}/available-senders${params.toString() ? "?" + params.toString() : ""}`;
+  const url = `${BACKEND_URL}/api/available-senders${params.toString() ? "?" + params.toString() : ""}`;
 
   const response = await fetch(url);
 
