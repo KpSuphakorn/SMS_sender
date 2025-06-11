@@ -36,7 +36,7 @@ export default function Datepicker({
           value={startDate || ""}
           max={endDate || today}
           onChange={handleStartDateChange}
-          className="border px-2 py-1 ml-2"
+          className="border px-2 py-1 ml-2 cursor-pointer"
         />
       </div>
       <div>
@@ -47,7 +47,7 @@ export default function Datepicker({
           min={startDate || ""}
           max={today}
           onChange={handleEndDateChange}
-          className="border px-2 py-1 ml-2"
+          className="border px-2 py-1 ml-2 cursor-pointer"
         />
       </div>
     </div>

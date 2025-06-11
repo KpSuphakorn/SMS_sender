@@ -5,7 +5,6 @@ import { getSession } from "next-auth/react";
 import getRequestList from "@/libs/getRequestList";
 import downloadFile from "@/libs/downloadFile";
 import Datepicker from "@/components/DatePicker";
-import RequestStatus from "@/components/RequestStatus";
 import { RequestLog } from "../../../interface";
 import { Download } from "lucide-react";
 
@@ -70,9 +69,9 @@ export default function HistoryPage() {
 
   return (
     <div className="p-6">
-      <h1 className="text-2xl font-bold mb-6">📜 ประวัติการส่งคำขอ</h1>
+      <h1 className="text-2xl font-bold mb-6 text-gray-800">📜 ประวัติการส่งคำขอ</h1>
 
-      <div className="bg-white p-4 rounded-xl shadow mb-6">
+      <div className="bg-white p-4 rounded-xl shadow-md mb-6">
         <Datepicker
           startDate={startDate}
           endDate={endDate}
@@ -82,12 +81,15 @@ export default function HistoryPage() {
       </div>
 
       <div className="overflow-x-auto">
-        <table className="min-w-full border rounded-xl overflow-hidden bg-white shadow">
-          <thead className="bg-gray-100 text-gray-700 text-sm font-medium">
+        <table className="min-w-full border rounded-xl overflow-hidden bg-white shadow-md">
+          <thead className="bg-gray-100 text-gray-700 text-sm font-semibold">
             <tr>
               <th className="px-4 py-3 text-left">📅 วันที่</th>
               <th className="px-4 py-3 text-left">🆔 Request ID</th>
-              <th className="px-4 py-3 text-left">📌 สถานะ</th>
+              <th className="px-4 py-3 text-center">กำลังขอข้อมูล</th>
+              <th className="px-4 py-3 text-center">ได้รับข้อมูล</th>
+              <th className="px-4 py-3 text-center">ร้องขอระงับสัญญาณ</th>
+              <th className="px-4 py-3 text-center">ระงับสัญญาณแล้ว</th>
               <th className="px-4 py-3 text-center">📤 ไฟล์ที่ส่ง</th>
               <th className="px-4 py-3 text-center">📥 ไฟล์ตอบกลับ</th>
             </tr>
@@ -96,19 +98,44 @@ export default function HistoryPage() {
             {filteredLogs.map((log, i) => (
               <tr
                 key={i}
-                className={i % 2 === 0 ? "bg-white" : "bg-gray-50 border-t border-gray-100"}
+                className={i % 2 === 0 ? "bg-white" : "bg-gray-50 border-t border-gray-200"}
               >
-                <td className="px-4 py-3">{log.thai_date}</td>
-                <td className="px-4 py-3">{log.request_id}</td>
-                <td className="px-4 py-3">
-                  <RequestStatus status={log.status} />
+                <td className="px-4 py-3 text-left">{log.thai_date}</td>
+                <td className="px-4 py-3 text-left">{log.request_id}</td>
+                <td className="px-4 py-3 text-center">
+                  {log.status.includes("pending") ? (
+                    <span className="text-green-500 font-bold">✓</span>
+                  ) : (
+                    <span className="text-red-500">✗</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-center">
+                  {log.status.includes("received") ? (
+                    <span className="text-green-500 font-bold">✓</span>
+                  ) : (
+                    <span className="text-red-500">✗</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-center">
+                  {log.status.includes("suspension_requested") ? (
+                    <span className="text-green-500 font-bold">✓</span>
+                  ) : (
+                    <span className="text-red-500">✗</span>
+                  )}
+                </td>
+                <td className="px-4 py-3 text-center">
+                  {log.status.includes("suspended") ? (
+                    <span className="text-green-500 font-bold">✓</span>
+                  ) : (
+                    <span className="text-red-500">✗</span>
+                  )}
                 </td>
                 <td className="px-4 py-3 text-center">
                   <div className="flex flex-col gap-1">
                     {log.pdf_sent_data_id && (
                       <button
                         onClick={() => handleDownload(log.pdf_sent_data_id!, true)}
-                        className="inline-flex items-center text-blue-600 hover:underline"
+                        className="inline-flex items-center text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
                       >
                         <Download className="w-4 h-4 mr-1" />
                         PDF ข้อมูล
@@ -117,7 +144,7 @@ export default function HistoryPage() {
                     {log.pdf_sent_suspension_id && (
                       <button
                         onClick={() => handleDownload(log.pdf_sent_suspension_id!, true)}
-                        className="inline-flex items-center text-blue-600 hover:underline"
+                        className="inline-flex items-center text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
                       >
                         <Download className="w-4 h-4 mr-1" />
                         PDF คำร้องระงับ
@@ -129,7 +156,7 @@ export default function HistoryPage() {
                   {log.reply_file_id ? (
                     <button
                       onClick={() => handleDownload(log.reply_file_id!, false)}
-                      className="inline-flex items-center text-green-600 hover:underline"
+                      className="inline-flex items-center text-green-600 hover:text-green-800 hover:underline cursor-pointer"
                     >
                       <Download className="w-4 h-4 mr-1" />
                       Excel/CSV

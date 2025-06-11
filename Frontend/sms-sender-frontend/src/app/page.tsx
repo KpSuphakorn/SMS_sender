@@ -32,25 +32,24 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-  const fetchData = async () => {
-    try {
-      let data;
-      if (!startDate && !endDate) {
-        // ถ้าไม่ได้เลือกช่วง → ดึงทั้งหมด
-        data = await getAvailableSenders();
-      } else {
-        // ดึงตามช่วงที่ระบุ
-        data = await getAvailableSenders(startDate, endDate);
+    const fetchData = async () => {
+      try {
+        let data;
+        if (!startDate && !endDate) {
+          // ถ้าไม่ได้เลือกช่วง → ดึงทั้งหมด
+          data = await getAvailableSenders();
+        } else {
+          // ดึงตามช่วงที่ระบุ
+          data = await getAvailableSenders(startDate, endDate);
+        }
+        setSenders(data);
+      } catch (err) {
+        console.error("โหลดข้อมูล senders ล้มเหลว", err);
       }
-      setSenders(data);
-    } catch (err) {
-      console.error("โหลดข้อมูล senders ล้มเหลว", err);
-    }
-  };
+    };
 
-  fetchData();
-}, [startDate, endDate]);
-
+    fetchData();
+  }, [startDate, endDate]);
 
   const toggleRow = (index: number) => {
     setSelectedRows((prev) => {
@@ -108,29 +107,27 @@ export default function DashboardPage() {
 
   return (
     <div className="p-6 max-w-screen-xl mx-auto">
-      
-<div className="flex justify-between items-center mb-6">
-  <h1 className="text-2xl font-bold">📋 ส่งคำขอข้อมูลจาก Sender</h1>
+      <div className="flex justify-between items-center mb-6">
+        <h1 className="text-2xl font-bold">📋 ส่งคำขอข้อมูลจาก Sender</h1>
 
-  <div className="flex items-center space-x-4">
-    <NotificationBell /> {/* 👈 กระดิ่งอยู่ซ้ายสุดของกลุ่มปุ่ม */}
-    
-    <button
-      onClick={() => router.push("/history")}
-      className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600"
-    >
-      ดูประวัติคำขอ
-    </button>
+        <div className="flex items-center space-x-4">
+          <NotificationBell /> {/* 👈 กระดิ่งอยู่ซ้ายสุดของกลุ่มปุ่ม */}
+          
+          <button
+            onClick={() => router.push("/history")}
+            className="px-4 py-2 bg-green-500 text-white rounded hover:bg-green-600 cursor-pointer"
+          >
+            ดูประวัติคำขอ
+          </button>
 
-    <button
-      onClick={handleLogout}
-      className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600"
-    >
-      ออกจากระบบ
-    </button>
-  </div>
-</div>
-
+          <button
+            onClick={handleLogout}
+            className="px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600 cursor-pointer"
+          >
+            ออกจากระบบ
+          </button>
+        </div>
+      </div>
 
       <div className="bg-white shadow rounded-lg p-4 mb-6">
         <Datepicker
@@ -162,7 +159,7 @@ export default function DashboardPage() {
 
       <div className="flex justify-end">
         <button
-          className="px-6 py-2 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 disabled:opacity-50"
+          className="px-6 py-2 bg-blue-600 text-white font-semibold rounded hover:bg-blue-700 disabled:opacity-50 cursor-pointer"
           onClick={handleSubmit}
           disabled={loading}
         >

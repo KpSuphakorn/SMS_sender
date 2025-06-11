@@ -57,7 +57,7 @@ export default function NotificationBell() {
 
   return (
     <div className="relative">
-      <button onClick={handleToggle} className="relative">
+      <button onClick={handleToggle} className="relative cursor-pointer">
         <Bell className="w-6 h-6" />
         {unreadCount > 0 && (
           <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-4 h-4 flex items-center justify-center">
