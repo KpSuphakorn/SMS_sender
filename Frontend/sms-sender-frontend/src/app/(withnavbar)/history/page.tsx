@@ -5,7 +5,7 @@ import { getSession } from "next-auth/react";
 import getRequestList from "@/libs/getRequestList";
 import downloadFile from "@/libs/downloadFile";
 import Datepicker from "@/components/DatePicker";
-import { RequestLog } from "../../../interface";
+import { RequestLog } from "../../../../interface";
 import { Download } from "lucide-react";
 
 export default function HistoryPage() {
