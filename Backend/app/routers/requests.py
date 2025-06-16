@@ -16,45 +16,90 @@ import asyncio
 router = APIRouter()
 
 def create_request(data: SenderRequest, current_user: dict):
+    sender_names = sender_names_collection()
     request_id = str(uuid.uuid4())
     thai_date = datetime.datetime.now().strftime("%d %B %Y")
-    data_pdf_id = generate_custom_pdf_and_store(data.rows, data.fields, request_id, thai_date)
-    suspension_pdf_id = generate_suspension_pdf(request_id, thai_date)
+    rows_to_request = []
+    existing_data = []
 
-    subject = f"ขอข้อมูลและระงับสัญญาณ (Request ID: {request_id})"
-    body = f"เรียนเจ้าหน้าที่\n\nRequest ID: {request_id}\nวันที่: {thai_date}\nกรุณาดำเนินการระงับสัญญาณตามเอกสารแนบและส่งข้อมูลกลับในรูปแบบ Excel/CSV"
-    send_email(subject, body, [data_pdf_id, suspension_pdf_id])
-
-    sender_names = sender_names_collection()
     for row in data.rows:
-        sender_names.update_one(
-            {"sender_name": row["sender_name"], "phone_number": row["phone_number"]},
-            {
-                "$set": {
-                    "request_id": request_id,
-                    "thai_date": thai_date,
-                    "fields": data.fields,
-                    "pdf_sent_data_id": data_pdf_id,
-                    "pdf_sent_suspension_id": suspension_pdf_id,
-                    "created_by": current_user["id"],
-                    "created_at": datetime.datetime.now(),
-                    "updated_at": datetime.datetime.now()
-                },
-                "$addToSet": {
-                    "status": {"$each": ["pending", "suspension_requested"]}
-                },
-                "$setOnInsert": {
-                    "mobile_provider": row.get("mobile_provider"),
-                    "full_name": row.get("full_name"),
-                    "date": row.get("date")
-                }
-            },
-            upsert=True
-        )
+        sender_name = row["sender_name"]
+        phone_number = row["phone_number"]
+        existing_doc = sender_names.find_one({
+            "sender_name": sender_name,
+            "phone_number": phone_number,
+            "status": {"$in": ["received", "suspended"]},
+            "reply_file_id": {"$exists": True}
+        }) or sender_names.find_one({
+            "sender_name": sender_name,
+            "status": {"$in": ["received", "suspended"]},
+            "reply_file_id": {"$exists": True}
+        })
+        if existing_doc:
+            sender_names.insert_one({
+                "sender_name": sender_name,
+                "phone_number": phone_number,
+                "mobile_provider": row.get("mobile_provider", existing_doc.get("mobile_provider")),
+                "full_name": row.get("full_name", existing_doc.get("full_name")),
+                "date": row.get("date", existing_doc.get("date")),
+                "request_id": request_id,
+                "thai_date": thai_date,
+                "fields": data.fields,
+                "status": ["pending", "suspension_requested"],
+                "reply_file_id": existing_doc.get("reply_file_id"),
+                "pdf_sent_data_id": existing_doc.get("pdf_sent_data_id"),
+                "pdf_sent_suspension_id": existing_doc.get("pdf_sent_suspension_id"),
+                "created_by": current_user["id"],
+                "created_at": datetime.datetime.now(),
+                "updated_at": datetime.datetime.now()
+            })
+            existing_data.append({
+                "sender_name": sender_name,
+                "phone_number": phone_number,
+                "reused_request_id": existing_doc["request_id"]
+            })
+        else:
+            rows_to_request.append(row)
+
+    if rows_to_request:
+        data_pdf_id = generate_custom_pdf_and_store([r for r in rows_to_request], data.fields, request_id, thai_date)
+        suspension_pdf_id = generate_suspension_pdf(request_id, thai_date)
+        subject = f"ขอข้อมูลและระงับสัญญาณ (Request ID: {request_id})"
+        body = f"เรียนเจ้าหน้าที่\n\nRequest ID: {request_id}\nวันที่: {thai_date}\nกรุณาดำเนินการระงับสัญญาณและส่งข้อมูลกลับในรูปแบบ Excel/CSV"
+        send_email(subject, body, [data_pdf_id, suspension_pdf_id])
+
+        for row in rows_to_request:
+            sender_names.insert_one({
+                "sender_name": row["sender_name"],
+                "phone_number": row["phone_number"],
+                "mobile_provider": row.get("mobile_provider"),
+                "full_name": row.get("full_name"),
+                "date": row.get("date"),
+                "request_id": request_id,
+                "thai_date": thai_date,
+                "fields": data.fields,
+                "status": ["pending", "suspension_requested"],
+                "pdf_sent_data_id": data_pdf_id,
+                "pdf_sent_suspension_id": suspension_pdf_id,
+                "created_by": current_user["id"],
+                "created_at": datetime.datetime.now(),
+                "updated_at": datetime.datetime.now()
+            })
+
+        for row in rows_to_request:
+            create_notification(request_id, row["sender_name"], "pending", current_user["id"], thai_date)
+            create_notification(request_id, row["sender_name"], "suspension_requested", current_user["id"], thai_date)
+
+    for row in existing_data:
         create_notification(request_id, row["sender_name"], "pending", current_user["id"], thai_date)
         create_notification(request_id, row["sender_name"], "suspension_requested", current_user["id"], thai_date)
 
-    return {"message": "ส่งคำขอเรียบร้อย", "request_id": request_id}
+    return {
+        "message": "สร้างคำร้องเรียนใหม่เรียบร้อย",
+        "request_id": request_id,
+        "existing_data": existing_data,
+        "requested_senders": [r["sender_name"] for r in rows_to_request]
+    }
 
 def mark_notification_read(notification_id: str, current_user: dict):
     notifications = notifications_collection()

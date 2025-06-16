@@ -52,16 +52,14 @@ def check_inbox_and_save_reply():
     sender_names = sender_names_collection()
     notifications = notifications_collection()
 
-    for doc in sender_names.find({"status": {"$in": ["pending", "suspension_requested"]}}):
-        request_id = doc.get("request_id")
+    request_ids = {doc["request_id"] for doc in sender_names.find({"status": {"$in": ["pending", "suspension_requested"]}}, {"request_id": 1})}
+    
+    for request_id in request_ids:
         if not request_id:
             continue
-        sender_name = doc["sender_name"]
-        phone_number = doc["phone_number"]
-        user_id = doc["created_by"]
-        thai_date = doc["thai_date"]
 
-        if notifications.find_one({"request_id": request_id, "sender_name": sender_name, "status": "received"}):
+        senders = list(sender_names.find({"request_id": request_id, "status": {"$in": ["pending", "suspension_requested"]}}))
+        if not senders:
             continue
 
         result, data = mail.search(None, f'(SUBJECT "{request_id}")')
@@ -79,51 +77,68 @@ def check_inbox_and_save_reply():
                     if filename and filename.lower().endswith((".csv", ".xlsx")):
                         file_data = part.get_payload(decode=True)
                         reply_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply")
-                        is_valid_response = check_response_contains_sender(file_data, sender_name, phone_number, filename)
-                        new_status = "received" if is_valid_response else "error"
-                        sender_names.update_one(
-                            {"sender_name": sender_name, "request_id": request_id},
-                            {
-                                "$addToSet": {"status": new_status},
-                                "$set": {
-                                    "reply_file_id": reply_id if is_valid_response else None,
-                                    "updated_at": datetime.datetime.now()
+                        
+                        matched_senders = check_response_contains_senders(file_data, senders, filename)
+                        
+                        for doc in senders:
+                            sender_name = doc["sender_name"]
+                            user_id = doc["created_by"]
+                            thai_date = doc["thai_date"]
+                            
+                            if notifications.find_one({"request_id": request_id, "sender_name": sender_name, "status": "received"}):
+                                continue
+                            
+                            is_valid = any(s["sender_name"] == sender_name for s in matched_senders)
+                            new_status = "received" if is_valid else "error"
+                            sender_names.update_one(
+                                {"sender_name": sender_name, "request_id": request_id},
+                                {
+                                    "$addToSet": {"status": new_status},
+                                    "$set": {
+                                        "reply_file_id": reply_id if is_valid else None,
+                                        "updated_at": datetime.datetime.now()
+                                    }
                                 }
-                            }
-                        )
-                        notifications.insert_one({
-                            "request_id": request_id,
-                            "sender_name": sender_name,
-                            "status": new_status,
-                            "user_id": user_id,
-                            "is_read": False,
-                            "thai_date": thai_date,
-                            "created_at": datetime.datetime.now()
-                        })
+                            )
+                            notifications.insert_one({
+                                "request_id": request_id,
+                                "sender_name": sender_name,
+                                "status": new_status,
+                                "user_id": user_id,
+                                "is_read": False,
+                                "thai_date": thai_date,
+                                "created_at": datetime.datetime.now()
+                            })
+                        
                         mail.store(num, '+FLAGS', '\\Seen')
                         break
     mail.logout()
 
-def check_response_contains_sender(file_data, sender_name, phone_number, filename):
+def check_response_contains_senders(file_data, senders, filename):
     try:
         if filename.lower().endswith(".csv"):
             df = pd.read_csv(BytesIO(file_data))
         else:
             df = pd.read_excel(BytesIO(file_data))
         df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_')
-        sender_name_clean = sender_name.strip().lower()
-        phone_number_clean = ''.join(filter(str.isdigit, str(phone_number))).lstrip('0')
-
+        
         sender_col = next((col for col in df.columns if "sender" in col and "name" in col), None)
         phone_col = next((col for col in df.columns if "phone" in col or "number" in col), None)
-
+        
         if not sender_col or not phone_col:
-            return False
+            return []
 
         df[sender_col] = df[sender_col].astype(str).str.strip().str.lower()
         df[phone_col] = df[phone_col].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
-
-        match = df[(df[sender_col] == sender_name_clean) & (df[phone_col] == phone_number_clean)]
-        return not match.empty
+        
+        matched_senders = []
+        for doc in senders:
+            sender_name_clean = doc["sender_name"].strip().lower()
+            phone_number_clean = ''.join(filter(str.isdigit, str(doc["phone_number"]))).lstrip('0')
+            match = df[(df[sender_col] == sender_name_clean) & (df[phone_col] == phone_number_clean)]
+            if not match.empty:
+                matched_senders.append({"sender_name": doc["sender_name"], "phone_number": doc["phone_number"]})
+        
+        return matched_senders
     except:
-        return False
+        return []
