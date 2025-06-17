@@ -10,6 +10,7 @@ from app.external_services.notification import create_notification
 from app.dependencies import get_current_user
 from app.models.database import grid_fs
 from bson.objectid import ObjectId
+from pymongo import UpdateOne
 import datetime
 import uuid
 import asyncio
@@ -26,6 +27,12 @@ def create_request(data: SenderRequest, current_user: dict):
     thai_date = datetime.datetime.now().strftime("%d %B %Y")
     rows_to_request = []
     existing_data = []
+    bulk_updates = []
+
+    # ตรวจสอบข้อมูลใน rows
+    for row in data.rows:
+        if not row.get("sender_name") or not row.get("phone_number"):
+            raise HTTPException(status_code=400, detail=f"Missing sender_name or phone_number in row: {row}")
 
     for row in data.rows:
         sender_name = row["sender_name"]
@@ -34,54 +41,71 @@ def create_request(data: SenderRequest, current_user: dict):
             "sender_name": sender_name,
             "phone_number": phone_number
         })
+
         if existing_doc and ("received" in existing_doc.get("status", []) or existing_doc.get("reply_file_id")):
             logger.debug(f"Existing sender with received data: {sender_name}, {phone_number}")
-            sender_names.update_one(
-                {"sender_name": sender_name, "phone_number": phone_number},
-                {
-                    "$addToSet": {
-                        "status": {"$each": ["pending", "suspension_requested"]},
-                        "request_ids": request_id
-                    },
+            # จำกัด request_ids ให้ไม่เกิน 5 รายการ
+            current_request_ids = existing_doc.get("request_ids", [])
+            if len(current_request_ids) >= 5:
+                current_request_ids = current_request_ids[-4:]  # เก็บ 4 รายการล่าสุด
+            
+            # เพิ่ม request_id ใหม่ด้วยสถานะ "skipped"
+            new_request_ids = current_request_ids + [{"id": request_id, "status": "skipped"}]
+            
+            update_data = {
+                "$set": {
+                    "request_ids": new_request_ids,
+                    "mobile_provider": row.get("mobile_provider", existing_doc.get("mobile_provider")),
+                    "full_name": row.get("full_name", existing_doc.get("full_name")),
+                    "date": row.get("date", existing_doc.get("date")),
+                    "thai_date": thai_date,
+                    "fields": data.fields,
+                    "created_by": current_user["id"],
+                    "updated_at": datetime.datetime.now()
+                }
+            }
+            
+            bulk_updates.append(
+                UpdateOne(
+                    {"sender_name": sender_name, "phone_number": phone_number},
+                    update_data
+                )
+            )
+            existing_data.append({
+                "sender_name": sender_name,
+                "phone_number": phone_number,
+                "reused_request_id": [req["id"] for req in existing_doc.get("request_ids", []) if req["status"] == "received"][0] if any(req["status"] == "received" for req in existing_doc.get("request_ids", [])) else None
+            })
+        else:
+            logger.debug(f"Adding to rows_to_request: {sender_name}, {phone_number}")
+            rows_to_request.append(row)
+            if existing_doc:
+                # จำกัด request_ids
+                current_request_ids = existing_doc.get("request_ids", [])
+                if len(current_request_ids) >= 5:
+                    current_request_ids = current_request_ids[-4:]
+                
+                new_request_ids = current_request_ids + [{"id": request_id, "status": "pending"}]
+                
+                update_data = {
                     "$set": {
+                        "status": existing_doc["status"] + ["pending", "suspension_requested"] if "pending" not in existing_doc["status"] else existing_doc["status"],
+                        "request_ids": new_request_ids,
                         "mobile_provider": row.get("mobile_provider", existing_doc.get("mobile_provider")),
                         "full_name": row.get("full_name", existing_doc.get("full_name")),
                         "date": row.get("date", existing_doc.get("date")),
-                        "request_id": request_id,
                         "thai_date": thai_date,
                         "fields": data.fields,
                         "created_by": current_user["id"],
                         "updated_at": datetime.datetime.now()
                     }
                 }
-            )
-            existing_data.append({
-                "sender_name": sender_name,
-                "phone_number": phone_number,
-                "reused_request_id": existing_doc.get("request_id")
-            })
-        else:
-            logger.debug(f"Adding to rows_to_request: {sender_name}, {phone_number}")
-            rows_to_request.append(row)
-            if existing_doc:
-                sender_names.update_one(
-                    {"sender_name": sender_name, "phone_number": phone_number},
-                    {
-                        "$addToSet": {
-                            "status": {"$each": ["pending", "suspension_requested"]},
-                            "request_ids": request_id
-                        },
-                        "$set": {
-                            "mobile_provider": row.get("mobile_provider", existing_doc.get("mobile_provider")),
-                            "full_name": row.get("full_name", existing_doc.get("full_name")),
-                            "date": row.get("date", existing_doc.get("date")),
-                            "request_id": request_id,
-                            "thai_date": thai_date,
-                            "fields": data.fields,
-                            "created_by": current_user["id"],
-                            "updated_at": datetime.datetime.now()
-                        }
-                    }
+                
+                bulk_updates.append(
+                    UpdateOne(
+                        {"sender_name": sender_name, "phone_number": phone_number},
+                        update_data
+                    )
                 )
 
     logger.debug(f"rows_to_request: {[r['sender_name'] for r in rows_to_request]}")
@@ -104,8 +128,7 @@ def create_request(data: SenderRequest, current_user: dict):
                     "mobile_provider": row.get("mobile_provider"),
                     "full_name": row.get("full_name"),
                     "date": row.get("date"),
-                    "request_id": request_id,
-                    "request_ids": [request_id],
+                    "request_ids": [{"id": request_id, "status": "pending"}],
                     "thai_date": thai_date,
                     "fields": data.fields,
                     "status": ["pending", "suspension_requested"],
@@ -120,9 +143,17 @@ def create_request(data: SenderRequest, current_user: dict):
             create_notification(request_id, row["sender_name"], "pending", current_user["id"], thai_date)
             create_notification(request_id, row["sender_name"], "suspension_requested", current_user["id"], thai_date)
 
+    # รัน bulk update
+    if bulk_updates:
+        try:
+            sender_names.bulk_write(bulk_updates)
+            logger.debug(f"Performed bulk update for {len(bulk_updates)} senders")
+        except Exception as e:
+            logger.error(f"Failed to perform bulk update: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Bulk update failed: {str(e)}")
+
     for row in existing_data:
-        create_notification(request_id, row["sender_name"], "pending", current_user["id"], thai_date)
-        create_notification(request_id, row["sender_name"], "suspension_requested", current_user["id"], thai_date)
+        create_notification(request_id, row["sender_name"], "skipped", current_user["id"], thai_date)
 
     return {
         "message": "สร้างคำร้องเรียนใหม่เรียบร้อย",
@@ -145,18 +176,20 @@ def mark_notification_read(notification_id: str, current_user: dict):
 
 def complete_suspension(request_id: str, sender_name: str):
     sender_names = sender_names_collection()
-    doc = sender_names.find_one({"request_ids": request_id, "sender_name": sender_name})
+    doc = sender_names.find_one({"request_ids.id": request_id, "sender_name": sender_name})
     if not doc:
         raise HTTPException(status_code=404, detail="Sender not found for this request")
     result = sender_names.update_one(
-        {"request_ids": request_id, "sender_name": sender_name},
+        {"request_ids.id": request_id, "sender_name": sender_name},
         {
             "$addToSet": {"status": "suspended"},
             "$set": {
+                "request_ids.$[elem].status": "suspended",
                 "updated_at": datetime.datetime.now(),
                 "suspended_at": datetime.datetime.now()
             }
-        }
+        },
+        array_filters=[{"elem.id": request_id}]
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Sender not found")
@@ -187,10 +220,10 @@ def get_requests(current_user: dict):
         response = response_from_telco.find_one({
             "sender_name": doc["sender_name"],
             "phone_number": doc["phone_number"],
-            "request_id": {"$in": doc.get("request_ids", [])}
+            "request_id": {"$in": [req["id"] for req in doc.get("request_ids", [])]}
         })
         result.append({
-            "request_id": doc.get("request_id"),
+            "request_id": [req["id"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None,
             "sender_name": doc["sender_name"],
             "thai_date": doc["thai_date"],
             "status": doc.get("status", []),
@@ -233,20 +266,18 @@ def get_available_senders(start: str = None, end: str = None):
     
     results = []
     for doc in sender_names.find(query, {"_id": 0}):
-        request_ids = doc.get("request_ids", [doc.get("request_id")]) if doc.get("request_id") else [None]
-        for _ in request_ids:
-            results.append({
-                "sender_name": doc["sender_name"],
-                "phone_number": doc["phone_number"],
-                "mobile_provider": doc.get("mobile_provider"),
-                "full_name": doc.get("full_name"),
-                "date": doc.get("date"),
-                "thai_date": doc.get("thai_date"),
-                "status": doc.get("status", []),
-                "request_ids": doc.get("request_ids", []),
-                "created_at": doc["created_at"],
-                "updated_at": doc["updated_at"]
-            })
+        results.append({
+            "sender_name": doc["sender_name"],
+            "phone_number": doc["phone_number"],
+            "mobile_provider": doc.get("mobile_provider"),
+            "full_name": doc.get("full_name"),
+            "date": doc.get("date"),
+            "thai_date": doc.get("thai_date"),
+            "status": doc.get("status", []),
+            "request_ids": doc.get("request_ids", []),
+            "created_at": doc["created_at"],
+            "updated_at": doc["updated_at"]
+        })
     return convert_objectid_to_str(results)
 
 @router.post("/request")

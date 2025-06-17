@@ -15,6 +15,8 @@ import datetime
 import pandas as pd
 from io import BytesIO
 import logging
+from uuid import uuid4
+from pymongo import UpdateOne
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -59,10 +61,11 @@ def check_inbox_and_save_reply():
         notifications = notifications_collection()
         response_from_telco = response_from_telco_collection()
 
+        # Query request_ids จาก field request_ids.id
         request_ids = set()
-        for doc in sender_names.find({"status": {"$in": ["pending", "suspension_requested"]}}, {"request_ids": 1}):
+        for doc in sender_names.find({"request_ids": {"$elemMatch": {"status": {"$in": ["pending", "suspension_requested"]}}}}, {"request_ids": 1}):
             if doc.get("request_ids"):
-                request_ids.update(doc["request_ids"])
+                request_ids.update(req["id"] for req in doc["request_ids"] if req["status"] in ["pending", "suspension_requested"])
 
         logger.debug(f"Checking inbox for request_ids: {request_ids}")
 
@@ -70,7 +73,8 @@ def check_inbox_and_save_reply():
             if not request_id:
                 continue
 
-            senders = list(sender_names.find({"request_ids": request_id, "status": {"$in": ["pending", "suspension_requested"]}}))
+            # Query senders ที่มี request_id และ status เป็น pending หรือ suspension_requested
+            senders = list(sender_names.find({"request_ids.id": request_id, "request_ids.status": {"$in": ["pending", "suspension_requested"]}}))
             if not senders:
                 logger.debug(f"No senders found for request_id: {request_id}")
                 continue
@@ -104,12 +108,13 @@ def check_inbox_and_save_reply():
                                 })
                             }
 
+                            bulk_updates = []
                             for doc in senders:
                                 sender_name = doc["sender_name"]
                                 user_id = doc["created_by"]
                                 thai_date = doc["thai_date"]
                                 
-                                # ข้ามการอัปเดตหากมี "received" ใน status แล้ว
+                                # ข้ามหากมี "received" ใน status แล้ว
                                 if "received" in doc["status"]:
                                     logger.debug(f"Skipping update for {sender_name}: already has 'received' status")
                                     continue
@@ -125,31 +130,37 @@ def check_inbox_and_save_reply():
                                 if new_status == "error" and "error" in doc["status"]:
                                     new_status = None
                                 
-                                # กำหนดสถานะที่จะลบ: ลบ "error" เมื่อ new_status = "received"
+                                # อัปเดต status และ request_ids
                                 status_filter = ["error"] if new_status == "received" else []
-                                
-                                # อัปเดต status โดยคง "pending" และ "suspension_requested"
                                 current_status = doc["status"]
                                 new_status_list = [s for s in current_status if s not in status_filter]
                                 if new_status:
                                     new_status_list.append(new_status)
                                 
+                                # อัปเดต request_ids โดยเปลี่ยนสถานะของ request_id ปัจจุบัน
+                                new_request_ids = [
+                                    {"id": req["id"], "status": new_status if req["id"] == request_id and new_status else req["status"]}
+                                    for req in doc.get("request_ids", [])
+                                ]
+                                
                                 update_data = {
                                     "$set": {
                                         "status": new_status_list,
+                                        "request_ids": new_request_ids,
                                         "reply_file_id": reply_id if is_valid else doc.get("reply_file_id"),
                                         "updated_at": datetime.datetime.now()
                                     }
                                 }
                                 
                                 try:
-                                    result = sender_names.update_one(
-                                        {"sender_name": sender_name, "phone_number": doc["phone_number"], "request_ids": request_id},
-                                        update_data
+                                    bulk_updates.append(
+                                        UpdateOne(
+                                            {"sender_name": sender_name, "phone_number": doc["phone_number"], "request_ids.id": request_id},
+                                            update_data
+                                        )
                                     )
-                                    logger.debug(f"Updated sender {sender_name} with status {new_status or 'unchanged'}, matched: {result.matched_count}, modified: {result.modified_count}")
                                 except Exception as e:
-                                    logger.error(f"Failed to update sender {sender_name}: {str(e)}")
+                                    logger.error(f"Failed to prepare update for sender {sender_name}: {str(e)}")
                                     continue
 
                                 if is_valid:
@@ -165,7 +176,7 @@ def check_inbox_and_save_reply():
                                                 "updated_at": datetime.datetime.now()
                                             })
                                 
-                                if new_status:  # สร้าง notification เฉพาะเมื่อมีสถานะใหม่
+                                if new_status:
                                     notifications.insert_one({
                                         "request_id": request_id,
                                         "sender_name": sender_name,
@@ -175,6 +186,19 @@ def check_inbox_and_save_reply():
                                         "thai_date": thai_date,
                                         "created_at": datetime.datetime.now()
                                     })
+                            
+                            # รัน bulk update
+                            if bulk_updates:
+                                try:
+                                    sender_names.bulk_write(bulk_updates)
+                                    logger.debug(f"Performed bulk update for {len(bulk_updates)} senders")
+                                except Exception as e:
+                                    logger.error(f"Failed to perform bulk update: {str(e)}")
+                            
+                            # ลบไฟล์จาก GridFS หากไม่มี sender ที่ valid
+                            if not any(any(s["sender_name"] == doc["sender_name"] for s in matched_senders) for doc in senders):
+                                grid_fs.delete(reply_id)
+                                logger.debug(f"Deleted unused file {filename} from GridFS")
                             
                             mail.store(num, '+FLAGS', '\\Seen')
                             break
