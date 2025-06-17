@@ -16,111 +16,123 @@ import uuid
 import asyncio
 import logging
 
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+def is_status_object(status):
+    """ตรวจสอบว่า status เป็น list ของ object หรือ string"""
+    return all(isinstance(s, dict) and "name" in s for s in status) if status else False
+
+def update_sender_data(row, existing_doc, request_id, current_user, fields, status="pending"):
+    """สร้าง update data สำหรับ sender"""
+    updated_at = datetime.datetime.now()
+    current_request_ids = existing_doc.get("request_ids", []) if existing_doc else []
+    if len(current_request_ids) >= 5:
+        current_request_ids = current_request_ids[-4:]
+    
+    new_request_ids = current_request_ids + [{"id": request_id, "status": status}]
+    
+    update_data = {
+        "request_ids": new_request_ids,
+        "mobile_provider": row.get("mobile_provider", existing_doc.get("mobile_provider") if existing_doc else None),
+        "full_name": row.get("full_name", existing_doc.get("full_name") if existing_doc else None),
+        "date": row.get("date", existing_doc.get("date") if existing_doc else None),
+        "fields": fields,
+        "created_by": current_user["id"],
+        "updated_at": updated_at
+    }
+    
+    if status != "skipped" and existing_doc:
+        current_status = existing_doc.get("status", [])
+        if is_status_object(current_status):
+            status_names = [s["name"] for s in current_status]
+        else:
+            status_names = current_status
+        if "pending" not in status_names:
+            new_statuses = [
+                {"name": "pending", "updated_at": updated_at},
+                {"name": "suspension_requested", "updated_at": updated_at}
+            ]
+            update_data["status"] = current_status + new_statuses if is_status_object(current_status) else new_statuses
+        else:
+            update_data["status"] = current_status
+    
+    return update_data
+
 def create_request(data: SenderRequest, current_user: dict):
+    """สร้างคำขอใหม่และส่ง email ไปยัง กสทช"""
     sender_names = sender_names_collection()
     request_id = str(uuid.uuid4())
-    thai_date = datetime.datetime.now().strftime("%d %B %Y")
+    updated_at = datetime.datetime.now()
     rows_to_request = []
     existing_data = []
     bulk_updates = []
 
-    # ตรวจสอบข้อมูลใน rows
+    # ตรวจสอบข้อมูล
     for row in data.rows:
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail=f"Missing sender_name or phone_number in row: {row}")
 
+    # ดึง senders ที่มีอยู่ในฐานข้อมูล
+    sender_map = {
+        (doc["sender_name"], doc["phone_number"]): doc
+        for doc in sender_names.find({
+            "sender_name": {"$in": [row["sender_name"] for row in data.rows]},
+            "phone_number": {"$in": [row["phone_number"] for row in data.rows]}
+        })
+    }
+
     for row in data.rows:
         sender_name = row["sender_name"]
         phone_number = row["phone_number"]
-        existing_doc = sender_names.find_one({
-            "sender_name": sender_name,
-            "phone_number": phone_number
-        })
+        existing_doc = sender_map.get((sender_name, phone_number))
 
-        if existing_doc and ("received" in existing_doc.get("status", []) or existing_doc.get("reply_file_id")):
+        has_received = False
+        if existing_doc:
+            current_status = existing_doc.get("status", [])
+            if is_status_object(current_status):
+                has_received = any(s["name"] == "received" for s in current_status)
+            else:
+                has_received = "received" in current_status
+
+        if existing_doc and (has_received or existing_doc.get("reply_file_id")):
             logger.debug(f"Existing sender with received data: {sender_name}, {phone_number}")
-            # จำกัด request_ids ให้ไม่เกิน 5 รายการ
-            current_request_ids = existing_doc.get("request_ids", [])
-            if len(current_request_ids) >= 5:
-                current_request_ids = current_request_ids[-4:]  # เก็บ 4 รายการล่าสุด
-            
-            # เพิ่ม request_id ใหม่ด้วยสถานะ "skipped"
-            new_request_ids = current_request_ids + [{"id": request_id, "status": "skipped"}]
-            
-            update_data = {
-                "$set": {
-                    "request_ids": new_request_ids,
-                    "mobile_provider": row.get("mobile_provider", existing_doc.get("mobile_provider")),
-                    "full_name": row.get("full_name", existing_doc.get("full_name")),
-                    "date": row.get("date", existing_doc.get("date")),
-                    "thai_date": thai_date,
-                    "fields": data.fields,
-                    "created_by": current_user["id"],
-                    "updated_at": datetime.datetime.now()
-                }
-            }
-            
+            update_data = update_sender_data(row, existing_doc, request_id, current_user, data.fields, status="skipped")
             bulk_updates.append(
                 UpdateOne(
                     {"sender_name": sender_name, "phone_number": phone_number},
-                    update_data
+                    {"$set": update_data}
                 )
             )
             existing_data.append({
                 "sender_name": sender_name,
                 "phone_number": phone_number,
-                "reused_request_id": [req["id"] for req in existing_doc.get("request_ids", []) if req["status"] == "received"][0] if any(req["status"] == "received" for req in existing_doc.get("request_ids", [])) else None
+                "reused_request_id": next((req["id"] for req in existing_doc.get("request_ids", []) if req["status"] == "received"), None)
             })
         else:
             logger.debug(f"Adding to rows_to_request: {sender_name}, {phone_number}")
             rows_to_request.append(row)
             if existing_doc:
-                # จำกัด request_ids
-                current_request_ids = existing_doc.get("request_ids", [])
-                if len(current_request_ids) >= 5:
-                    current_request_ids = current_request_ids[-4:]
-                
-                new_request_ids = current_request_ids + [{"id": request_id, "status": "pending"}]
-                
-                update_data = {
-                    "$set": {
-                        "status": existing_doc["status"] + ["pending", "suspension_requested"] if "pending" not in existing_doc["status"] else existing_doc["status"],
-                        "request_ids": new_request_ids,
-                        "mobile_provider": row.get("mobile_provider", existing_doc.get("mobile_provider")),
-                        "full_name": row.get("full_name", existing_doc.get("full_name")),
-                        "date": row.get("date", existing_doc.get("date")),
-                        "thai_date": thai_date,
-                        "fields": data.fields,
-                        "created_by": current_user["id"],
-                        "updated_at": datetime.datetime.now()
-                    }
-                }
-                
+                update_data = update_sender_data(row, existing_doc, request_id, current_user, data.fields)
                 bulk_updates.append(
                     UpdateOne(
                         {"sender_name": sender_name, "phone_number": phone_number},
-                        update_data
+                        {"$set": update_data}
                     )
                 )
 
-    logger.debug(f"rows_to_request: {[r['sender_name'] for r in rows_to_request]}")
-    logger.debug(f"existing_data: {[r['sender_name'] for r in existing_data]}")
-
     if rows_to_request:
-        data_pdf_id = generate_custom_pdf_and_store([r for r in rows_to_request], data.fields, request_id, thai_date)
-        suspension_pdf_id = generate_suspension_pdf(request_id, thai_date)
+        updated_at_str = updated_at.strftime("%d %B %Y")
+        data_pdf_id = generate_custom_pdf_and_store([r for r in rows_to_request], data.fields, request_id, updated_at_str)
+        suspension_pdf_id = generate_suspension_pdf(request_id, updated_at_str)
         subject = f"ขอข้อมูลและระงับสัญญาณ (Request ID: {request_id})"
-        body = f"เรียนเจ้าหน้าที่\n\nRequest ID: {request_id}\nวันที่: {thai_date}\nกรุณาดำเนินการระงับสัญญาณและส่งข้อมูลกลับในรูปแบบ Excel/CSV"
-        logger.debug(f"Sending email with subject: {subject}")
+        body = f"เรียนเจ้าหน้าที่\n\nRequest ID: {request_id}\nวันที่: {updated_at_str}\nกรุณาดำเนินการระงับสัญญาณและส่งข้อมูลกลับในรูปแบบ Excel/CSV"
         send_email(subject, body, [data_pdf_id, suspension_pdf_id])
 
         for row in rows_to_request:
-            if not sender_names.find_one({"sender_name": row["sender_name"], "phone_number": row["phone_number"]}):
+            if not sender_map.get((row["sender_name"], row["phone_number"])):
                 logger.debug(f"Inserting new sender: {row['sender_name']}")
                 sender_names.insert_one({
                     "sender_name": row["sender_name"],
@@ -129,31 +141,28 @@ def create_request(data: SenderRequest, current_user: dict):
                     "full_name": row.get("full_name"),
                     "date": row.get("date"),
                     "request_ids": [{"id": request_id, "status": "pending"}],
-                    "thai_date": thai_date,
                     "fields": data.fields,
-                    "status": ["pending", "suspension_requested"],
+                    "status": [
+                        {"name": "pending", "updated_at": updated_at},
+                        {"name": "suspension_requested", "updated_at": updated_at}
+                    ],
                     "pdf_sent_data_id": data_pdf_id,
                     "pdf_sent_suspension_id": suspension_pdf_id,
                     "created_by": current_user["id"],
                     "created_at": datetime.datetime.now(),
-                    "updated_at": datetime.datetime.now()
+                    "updated_at": updated_at
                 })
 
         for row in rows_to_request:
-            create_notification(request_id, row["sender_name"], "pending", current_user["id"], thai_date)
-            create_notification(request_id, row["sender_name"], "suspension_requested", current_user["id"], thai_date)
+            create_notification(request_id, row["sender_name"], "pending", current_user["id"], updated_at_str)
+            create_notification(request_id, row["sender_name"], "suspension_requested", current_user["id"], updated_at_str)
 
-    # รัน bulk update
     if bulk_updates:
-        try:
-            sender_names.bulk_write(bulk_updates)
-            logger.debug(f"Performed bulk update for {len(bulk_updates)} senders")
-        except Exception as e:
-            logger.error(f"Failed to perform bulk update: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Bulk update failed: {str(e)}")
+        sender_names.bulk_write(bulk_updates)
+        logger.debug(f"Performed bulk update for {len(bulk_updates)} senders")
 
     for row in existing_data:
-        create_notification(request_id, row["sender_name"], "skipped", current_user["id"], thai_date)
+        create_notification(request_id, row["sender_name"], "skipped", current_user["id"], updated_at.strftime("%d %B %Y"))
 
     return {
         "message": "สร้างคำร้องเรียนใหม่เรียบร้อย",
@@ -163,6 +172,7 @@ def create_request(data: SenderRequest, current_user: dict):
     }
 
 def mark_notification_read(notification_id: str, current_user: dict):
+    """ทำเครื่องหมายว่า notification อ่านแล้ว"""
     notifications = notifications_collection()
     result = notifications.update_one(
         {"_id": ObjectId(notification_id), "user_id": current_user["id"]},
@@ -170,48 +180,64 @@ def mark_notification_read(notification_id: str, current_user: dict):
     )
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Notification not found")
-    if result.modified_count == 0:
-        return {"message": "Notification already marked as read"}
-    return {"message": "Marked as read"}
+    return {"message": "Marked as read" if result.modified_count else "Notification already marked as read"}
 
 def complete_suspension(request_id: str, sender_name: str):
+    """ทำเครื่องหมายว่า sender ถูกระงับ"""
     sender_names = sender_names_collection()
     doc = sender_names.find_one({"request_ids.id": request_id, "sender_name": sender_name})
     if not doc:
         raise HTTPException(status_code=404, detail="Sender not found for this request")
+    
+    updated_at = datetime.datetime.now()
+    current_status = doc.get("status", [])
+    if is_status_object(current_status):
+        status_names = [s["name"] for s in current_status]
+    else:
+        status_names = current_status
+    
+    update_data = {
+        "request_ids.$[elem].status": "suspended",
+        "updated_at": updated_at,
+        "suspended_at": updated_at
+    }
+    
+    if "suspended" not in status_names:
+        if is_status_object(current_status):
+            update_data["status"] = current_status + [{"name": "suspended", "updated_at": updated_at}]
+        else:
+            update_data["status"] = [{"name": s, "updated_at": doc.get("updated_at", updated_at)} for s in current_status] + [{"name": "suspended", "updated_at": updated_at}]
+    
     result = sender_names.update_one(
         {"request_ids.id": request_id, "sender_name": sender_name},
-        {
-            "$addToSet": {"status": "suspended"},
-            "$set": {
-                "request_ids.$[elem].status": "suspended",
-                "updated_at": datetime.datetime.now(),
-                "suspended_at": datetime.datetime.now()
-            }
-        },
+        {"$set": update_data},
         array_filters=[{"elem.id": request_id}]
     )
+    
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Sender not found")
-    if result.modified_count == 0:
-        return {"message": "Sender already marked as suspended"}
-    create_notification(request_id, sender_name, "suspended", doc["created_by"], doc["thai_date"])
-    return {"message": "Suspension completed for sender"}
+    if result.modified_count:
+        create_notification(request_id, sender_name, "suspended", doc["created_by"], updated_at.strftime("%d %B %Y"))
+    return {"message": "Suspension completed for sender" if result.modified_count else "Sender already marked as suspended"}
 
 def get_notifications(current_user: dict):
+    """ดึง notifications ของผู้ใช้"""
     notifications = notifications_collection()
-    notifications_data = notifications.find({"user_id": current_user["id"]}).sort("created_at", -1)
-    return [{
-        "notification_id": str(doc["_id"]),
-        "request_id": doc["request_id"],
-        "sender_name": doc.get("sender_name", ""),
-        "status": doc["status"],
-        "thai_date": doc["thai_date"],
-        "is_read": doc["is_read"],
-        "created_at": doc["created_at"]
-    } for doc in notifications_data]
+    return [
+        {
+            "notification_id": str(doc["_id"]),
+            "request_id": doc["request_id"],
+            "sender_name": doc.get("sender_name", ""),
+            "status": doc["status"],
+            "date": doc["thai_date"],
+            "is_read": doc["is_read"],
+            "created_at": doc["created_at"]
+        }
+        for doc in notifications.find({"user_id": current_user["id"]}).sort("created_at", -1)
+    ]
 
 def get_requests(current_user: dict):
+    """ดึงคำขอของผู้ใช้"""
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
     requests = sender_names.find({"created_by": current_user["id"]}).sort("created_at", -1)
@@ -222,11 +248,20 @@ def get_requests(current_user: dict):
             "phone_number": doc["phone_number"],
             "request_id": {"$in": [req["id"] for req in doc.get("request_ids", [])]}
         })
+        latest_request_id = [req["id"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None
+        status = doc.get("status", [])
+        if not is_status_object(status):
+            status = [{"name": s, "updated_at": doc.get("updated_at", datetime.datetime.now())} for s in status]
         result.append({
-            "request_id": [req["id"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None,
+            "request_id": latest_request_id,
             "sender_name": doc["sender_name"],
-            "thai_date": doc["thai_date"],
-            "status": doc.get("status", []),
+            "date": doc["updated_at"].strftime("%d %B %Y") if doc.get("updated_at") else None,
+            "sender_created_date": doc.get("date"),
+            "status": [
+                {"name": s["name"], "updated_at": s["updated_at"].strftime("%d %B %Y %H:%M")} 
+                for s in status
+            ],
+            "latest_request_status": next((req["status"] for req in doc.get("request_ids", []) if req["id"] == latest_request_id), None),
             "data": response.get("data", {}) if response else {},
             "reply_file_id": str(response.get("reply_file_id", "")) if response else "",
             "pdf_sent_data_id": str(doc.get("pdf_sent_data_id", "")),
@@ -238,47 +273,56 @@ def get_requests(current_user: dict):
 from app.utils.helpers import convert_objectid_to_str
 
 def get_available_senders(start: str = None, end: str = None):
+    """ดึง senders ที่มีอยู่ตามช่วงวันที่"""
     sender_names = sender_names_collection()
     today = datetime.date.today()
     query = {}
+    
     if start:
         try:
-            start_date = datetime.datetime.strptime(start, "%Y-%m-%d").date()
+            start_date = datetime.datetime.strptime(start, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง ควรใช้ YYYY-MM-DD")
     if end:
         try:
-            end_date = datetime.datetime.strptime(end, "%Y-%m-%d").date()
+            end_date = datetime.datetime.strptime(end, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง ควรใช้ YYYY-MM-DD")
     if start and end:
-        if start_date > end_date:
+        if start_date.date() > end_date.date():
             raise HTTPException(status_code=400, detail="วันที่เริ่มต้นต้องน้อยกว่าหรือเท่ากับวันที่สิ้นสุด")
-        if end_date > today:
+        if end_date.date() > today:
             raise HTTPException(status_code=400, detail="วันที่สิ้นสุดต้องไม่มากกว่าวันปัจจุบัน")
-        query["date"] = {"$gte": start, "$lte": end}
+        query["updated_at"] = {"$gte": start_date, "$lte": end_date}
     elif start:
-        query["date"] = {"$gte": start}
+        query["updated_at"] = {"$gte": start_date}
     elif end:
-        if end_date > today:
+        if end_date.date() > today:
             raise HTTPException(status_code=400, detail="วันที่สิ้นสุดต้องไม่มากกว่าวันปัจจุบัน")
-        query["date"] = {"$lte": end}
+        query["updated_at"] = {"$lte": end_date}
     
-    results = []
-    for doc in sender_names.find(query, {"_id": 0}):
-        results.append({
+    return [
+        {
             "sender_name": doc["sender_name"],
             "phone_number": doc["phone_number"],
             "mobile_provider": doc.get("mobile_provider"),
             "full_name": doc.get("full_name"),
-            "date": doc.get("date"),
-            "thai_date": doc.get("thai_date"),
-            "status": doc.get("status", []),
-            "request_ids": doc.get("request_ids", []),
+            "date": doc["updated_at"].strftime("%d %B %Y") if doc.get("updated_at") else None,
+            "sender_created_date": doc.get("date"),
+            "status": [
+                {"name": s["name"], "updated_at": s["updated_at"].strftime("%d %B %Y %H:%M")} 
+                for s in (
+                    doc.get("status", []) if is_status_object(doc.get("status", []))
+                    else [{"name": s, "updated_at": doc.get("updated_at", datetime.datetime.now())} for s in doc.get("status", [])]
+                )
+            ],
+            "latest_request_id": [req["id"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None,
+            "latest_request_status": [req["status"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None,
             "created_at": doc["created_at"],
             "updated_at": doc["updated_at"]
-        })
-    return convert_objectid_to_str(results)
+        }
+        for doc in sender_names.find(query, {"_id": 0})
+    ]
 
 @router.post("/request")
 def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(get_current_user)):
@@ -309,8 +353,11 @@ def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
         temp_path = f"/tmp/{file_obj.filename}"
         with open(temp_path, 'wb') as f:
             f.write(file_obj.read())
-        media_type = 'application/pdf' if file_obj.filename.endswith('.pdf') else \
-                     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if file_obj.filename.endswith('.xlsx') else 'text/csv'
+        media_type = (
+            'application/pdf' if file_obj.filename.endswith('.pdf') else
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if file_obj.filename.endswith('.xlsx') else
+            'text/csv'
+        )
         return FileResponse(temp_path, media_type=media_type, filename=file_obj.filename)
     except:
         raise HTTPException(status_code=404, detail="ไม่พบไฟล์")
@@ -326,8 +373,8 @@ async def start_check_replies_loop():
         while True:
             try:
                 check_inbox_and_save_reply()
-                print("✅ Checked inbox for replies")
+                logger.info("Checked inbox for replies")
             except Exception as e:
-                print(f"❌ Error in check-inbox loop: {str(e)}")
+                logger.error(f"Error in check-inbox loop: {str(e)}")
             await asyncio.sleep(10)
     asyncio.create_task(loop_check())

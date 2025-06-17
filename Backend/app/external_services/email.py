@@ -15,8 +15,8 @@ import datetime
 import pandas as pd
 from io import BytesIO
 import logging
-from uuid import uuid4
 from pymongo import UpdateOne
+from contextlib import contextmanager
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -30,7 +30,30 @@ SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT"))
 IMAP_SERVER = os.getenv("IMAP_SERVER")
 
+@contextmanager
+def imap_connection():
+    """Context manager สำหรับการเชื่อมต่อ IMAP"""
+    mail = imaplib.IMAP4_SSL(IMAP_SERVER)
+    try:
+        mail.login(SENDER_EMAIL, SENDER_PASSWORD)
+        mail.select("inbox")
+        yield mail
+    finally:
+        mail.logout()
+
+@contextmanager
+def smtp_connection():
+    """Context manager สำหรับการเชื่อมต่อ SMTP"""
+    server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+    try:
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        yield server
+    finally:
+        server.quit()
+
 def send_email(subject, body, file_ids):
+    """ส่ง email พร้อมไฟล์แนบ"""
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = os.getenv("RECIPIENT_EMAIL")
@@ -46,169 +69,181 @@ def send_email(subject, body, file_ids):
         part.add_header("Content-Disposition", f'attachment; filename="{filename}"')
         msg.attach(part)
 
-    with smtplib.SMTP(SMTP_SERVER, SMTP_PORT) as server:
-        server.starttls()
-        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+    with smtp_connection() as server:
         server.send_message(msg)
 
+def is_status_object(status):
+    """ตรวจสอบว่า status เป็น list ของ object หรือ string"""
+    return all(isinstance(s, dict) and "name" in s for s in status) if status else False
+
+def has_final_status(doc, request_id, existing_notifications):
+    """ตรวจสอบว่า sender มีสถานะ final (received/error) หรือไม่"""
+    sender_name = doc["sender_name"]
+    status = doc.get("status", [])
+    if is_status_object(status):
+        status_names = [s["name"] for s in status]
+    else:
+        status_names = status
+    return (
+        "received" in status_names or
+        (sender_name, "received") in existing_notifications or
+        (sender_name, "error") in existing_notifications
+    )
+
+def update_sender_status(doc, request_id, is_valid, reply_id):
+    """สร้าง update data สำหรับ sender"""
+    updated_at = datetime.datetime.now()
+    new_status_name = "received" if is_valid else "error"
+    current_status = doc.get("status", [])
+    
+    if is_status_object(current_status):
+        status_names = [s["name"] for s in current_status]
+        new_status = None if new_status_name == "error" and "error" in status_names else {"name": new_status_name, "updated_at": updated_at}
+        status_filter = ["error"] if new_status_name == "received" else []
+        new_status_list = [s for s in current_status if s["name"] not in status_filter]
+    else:
+        new_status = {"name": new_status_name, "updated_at": updated_at}
+        status_filter = ["error"] if new_status_name == "received" else []
+        new_status_list = [{"name": s, "updated_at": doc.get("updated_at", updated_at)} for s in current_status if s not in status_filter]
+    
+    if new_status:
+        new_status_list.append(new_status)
+
+    new_request_ids = [
+        {"id": req["id"], "status": new_status_name if req["id"] == request_id and new_status else req["status"]}
+        for req in doc.get("request_ids", [])
+    ]
+
+    return {
+        "status": new_status_list,
+        "request_ids": new_request_ids,
+        "reply_file_id": reply_id if is_valid else doc.get("reply_file_id"),
+        "updated_at": updated_at
+    }, new_status_name if new_status else None
+
 def check_inbox_and_save_reply():
+    """ตรวจสอบ inbox และบันทึกไฟล์ตอบกลับ"""
     try:
-        mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-        mail.login(SENDER_EMAIL, SENDER_PASSWORD)
-        mail.select("inbox")
+        with imap_connection() as mail:
+            sender_names = sender_names_collection()
+            notifications = notifications_collection()
+            response_from_telco = response_from_telco_collection()
 
-        sender_names = sender_names_collection()
-        notifications = notifications_collection()
-        response_from_telco = response_from_telco_collection()
+            request_ids = set()
+            for doc in sender_names.find(
+                {"request_ids": {"$elemMatch": {"status": {"$in": ["pending", "suspension_requested"]}}}},
+                {"request_ids": 1}
+            ):
+                request_ids.update(
+                    req["id"] for req in doc.get("request_ids", []) if req["status"] in ["pending", "suspension_requested"]
+                )
 
-        # Query request_ids จาก field request_ids.id
-        request_ids = set()
-        for doc in sender_names.find({"request_ids": {"$elemMatch": {"status": {"$in": ["pending", "suspension_requested"]}}}}, {"request_ids": 1}):
-            if doc.get("request_ids"):
-                request_ids.update(req["id"] for req in doc["request_ids"] if req["status"] in ["pending", "suspension_requested"])
+            logger.debug(f"Checking inbox for request_ids: {request_ids}")
 
-        logger.debug(f"Checking inbox for request_ids: {request_ids}")
+            for request_id in request_ids:
+                if not request_id:
+                    continue
 
-        for request_id in request_ids:
-            if not request_id:
-                continue
+                senders = list(sender_names.find({
+                    "request_ids.id": request_id,
+                    "request_ids.status": {"$in": ["pending", "suspension_requested"]}
+                }))
+                if not senders:
+                    logger.debug(f"No senders found for request_id: {request_id}")
+                    continue
 
-            # Query senders ที่มี request_id และ status เป็น pending หรือ suspension_requested
-            senders = list(sender_names.find({"request_ids.id": request_id, "request_ids.status": {"$in": ["pending", "suspension_requested"]}}))
-            if not senders:
-                logger.debug(f"No senders found for request_id: {request_id}")
-                continue
+                result, data = mail.search(None, f'(SUBJECT "{request_id}")')
+                if result != 'OK':
+                    logger.debug(f"No emails found for request_id: {request_id}")
+                    continue
 
-            result, data = mail.search(None, f'(SUBJECT "{request_id}")')
-            if result != 'OK':
-                logger.debug(f"No emails found for request_id: {request_id}")
-                continue
-
-            for num in data[0].split():
-                _, msg_data = mail.fetch(num, "(RFC822)")
-                msg = email.message_from_bytes(msg_data[0][1])
-                if msg["From"] and SENDER_EMAIL.lower() not in msg["From"].lower():
-                    for part in msg.walk():
-                        if part.get_content_maintype() == 'multipart' or part.get('Content-Disposition') is None:
-                            continue
-                        filename = part.get_filename()
-                        if filename and filename.lower().endswith((".csv", ".xlsx")):
-                            file_data = part.get_payload(decode=True)
-                            reply_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply")
-                            
-                            matched_senders = check_response_contains_senders(file_data, senders, filename)
-                            logger.debug(f"Matched senders for {filename}: {[s['sender_name'] for s in matched_senders]}")
-                            
-                            existing_notifications = {
-                                (n["sender_name"], n["status"]): n
-                                for n in notifications.find({
-                                    "request_id": request_id,
-                                    "sender_name": {"$in": [s["sender_name"] for s in senders]},
-                                    "status": {"$in": ["received", "error"]}
-                                })
-                            }
-
-                            bulk_updates = []
-                            for doc in senders:
-                                sender_name = doc["sender_name"]
-                                user_id = doc["created_by"]
-                                thai_date = doc["thai_date"]
+                for num in data[0].split():
+                    _, msg_data = mail.fetch(num, "(RFC822)")
+                    msg = email.message_from_bytes(msg_data[0][1])
+                    if msg["From"] and SENDER_EMAIL.lower() not in msg["From"].lower():
+                        for part in msg.walk():
+                            if part.get_content_maintype() == 'multipart' or part.get('Content-Disposition') is None:
+                                continue
+                            filename = part.get_filename()
+                            if filename and filename.lower().endswith((".csv", ".xlsx")):
+                                file_data = part.get_payload(decode=True)
+                                reply_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply")
                                 
-                                # ข้ามหากมี "received" ใน status แล้ว
-                                if "received" in doc["status"]:
-                                    logger.debug(f"Skipping update for {sender_name}: already has 'received' status")
-                                    continue
+                                matched_senders = check_response_contains_senders(file_data, senders, filename)
+                                logger.debug(f"Matched senders for {filename}: {[s['sender_name'] for s in matched_senders]}")
                                 
-                                if (sender_name, "received") in existing_notifications or (sender_name, "error") in existing_notifications:
-                                    logger.debug(f"Notification already exists for {sender_name} with status 'received' or 'error'")
-                                    continue
-                                
-                                is_valid = any(s["sender_name"] == sender_name for s in matched_senders)
-                                new_status = "received" if is_valid else "error"
-                                
-                                # ป้องกันการเพิ่ม "error" ซ้ำ
-                                if new_status == "error" and "error" in doc["status"]:
-                                    new_status = None
-                                
-                                # อัปเดต status และ request_ids
-                                status_filter = ["error"] if new_status == "received" else []
-                                current_status = doc["status"]
-                                new_status_list = [s for s in current_status if s not in status_filter]
-                                if new_status:
-                                    new_status_list.append(new_status)
-                                
-                                # อัปเดต request_ids โดยเปลี่ยนสถานะของ request_id ปัจจุบัน
-                                new_request_ids = [
-                                    {"id": req["id"], "status": new_status if req["id"] == request_id and new_status else req["status"]}
-                                    for req in doc.get("request_ids", [])
-                                ]
-                                
-                                update_data = {
-                                    "$set": {
-                                        "status": new_status_list,
-                                        "request_ids": new_request_ids,
-                                        "reply_file_id": reply_id if is_valid else doc.get("reply_file_id"),
-                                        "updated_at": datetime.datetime.now()
-                                    }
+                                existing_notifications = {
+                                    (n["sender_name"], n["status"]): n
+                                    for n in notifications.find({
+                                        "request_id": request_id,
+                                        "sender_name": {"$in": [s["sender_name"] for s in senders]},
+                                        "status": {"$in": ["received", "error"]}
+                                    })
                                 }
-                                
-                                try:
+
+                                bulk_updates = []
+                                any_valid = False
+                                for doc in senders:
+                                    sender_name = doc["sender_name"]
+                                    user_id = doc["created_by"]
+                                    updated_at = datetime.datetime.now()
+                                    
+                                    if has_final_status(doc, request_id, existing_notifications):
+                                        logger.debug(f"Skipping update for {sender_name}: already has final status")
+                                        continue
+                                    
+                                    is_valid = any(s["sender_name"] == sender_name for s in matched_senders)
+                                    if is_valid:
+                                        any_valid = True
+                                    
+                                    update_data, new_status = update_sender_status(doc, request_id, is_valid, reply_id)
+                                    
                                     bulk_updates.append(
                                         UpdateOne(
                                             {"sender_name": sender_name, "phone_number": doc["phone_number"], "request_ids.id": request_id},
-                                            update_data
+                                            {"$set": update_data}
                                         )
                                     )
-                                except Exception as e:
-                                    logger.error(f"Failed to prepare update for sender {sender_name}: {str(e)}")
-                                    continue
 
-                                if is_valid:
-                                    for sender in matched_senders:
-                                        if sender["sender_name"] == sender_name:
-                                            response_from_telco.insert_one({
-                                                "sender_name": sender["sender_name"],
-                                                "phone_number": sender["phone_number"],
-                                                "request_id": request_id,
-                                                "reply_file_id": reply_id,
-                                                "data": sender.get("data", {}),
-                                                "created_at": datetime.datetime.now(),
-                                                "updated_at": datetime.datetime.now()
-                                            })
+                                    if is_valid:
+                                        for sender in matched_senders:
+                                            if sender["sender_name"] == sender_name:
+                                                response_from_telco.insert_one({
+                                                    "sender_name": sender["sender_name"],
+                                                    "phone_number": sender["phone_number"],
+                                                    "request_id": request_id,
+                                                    "reply_file_id": reply_id,
+                                                    "data": sender.get("data", {}),
+                                                    "created_at": datetime.datetime.now(),
+                                                    "updated_at": updated_at
+                                                })
+                                    
+                                    if new_status:
+                                        notifications.insert_one({
+                                            "request_id": request_id,
+                                            "sender_name": sender_name,
+                                            "status": new_status,
+                                            "user_id": user_id,
+                                            "is_read": False,
+                                            "thai_date": updated_at.strftime("%d %B %Y"),
+                                            "created_at": datetime.datetime.now()
+                                        })
                                 
-                                if new_status:
-                                    notifications.insert_one({
-                                        "request_id": request_id,
-                                        "sender_name": sender_name,
-                                        "status": new_status,
-                                        "user_id": user_id,
-                                        "is_read": False,
-                                        "thai_date": thai_date,
-                                        "created_at": datetime.datetime.now()
-                                    })
-                            
-                            # รัน bulk update
-                            if bulk_updates:
-                                try:
+                                if bulk_updates:
                                     sender_names.bulk_write(bulk_updates)
                                     logger.debug(f"Performed bulk update for {len(bulk_updates)} senders")
-                                except Exception as e:
-                                    logger.error(f"Failed to perform bulk update: {str(e)}")
-                            
-                            # ลบไฟล์จาก GridFS หากไม่มี sender ที่ valid
-                            if not any(any(s["sender_name"] == doc["sender_name"] for s in matched_senders) for doc in senders):
-                                grid_fs.delete(reply_id)
-                                logger.debug(f"Deleted unused file {filename} from GridFS")
-                            
-                            mail.store(num, '+FLAGS', '\\Seen')
-                            break
-        mail.logout()
+                                
+                                if not any_valid:
+                                    grid_fs.delete(reply_id)
+                                    logger.debug(f"Deleted unused file {filename} from GridFS")
+                                
+                                mail.store(num, '+FLAGS', '\\Seen')
+                                break
     except Exception as e:
         logger.error(f"Error in check_inbox_and_save_reply: {str(e)}")
-        if mail:
-            mail.logout()
 
 def check_response_contains_senders(file_data, senders, filename):
+    """ตรวจสอบว่าไฟล์มีข้อมูล sender หรือไม่"""
     try:
         if filename.lower().endswith(".csv"):
             df = pd.read_csv(BytesIO(file_data))
@@ -218,8 +253,8 @@ def check_response_contains_senders(file_data, senders, filename):
         logger.debug(f"Columns in file {filename}: {list(df.columns)}")
         df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_').str.replace(r'[^\w]', '', regex=True)
         
-        sender_col = next((col for col in df.columns if any(k in col for k in ["sender", "sendername", "name"])), None)
-        phone_col = next((col for col in df.columns if any(k in col for k in ["phone", "phonenumber", "number", "mobile"])), None)
+        sender_col = next((col for col in df.columns if any(k in col.lower() for k in ["sender", "sendername", "name"])), None)
+        phone_col = next((col for col in df.columns if any(k in col.lower() for k in ["phone", "phonenumber", "number", "mobile"])), None)
         
         if not sender_col or not phone_col:
             logger.warning(f"No sender_name or phone_number column found in {filename}")
