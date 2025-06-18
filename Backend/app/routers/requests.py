@@ -9,6 +9,7 @@ from app.external_services.email import send_email
 from app.external_services.notification import create_notification
 from app.dependencies import get_current_user
 from app.models.database import grid_fs
+from app.utils.helpers import convert_objectid_to_str, format_sender_doc, is_status_object
 from bson.objectid import ObjectId
 from pymongo import UpdateOne
 import datetime
@@ -21,11 +22,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-def is_status_object(status):
-    """ตรวจสอบว่า status เป็น list ของ object หรือ string"""
-    return all(isinstance(s, dict) and "name" in s for s in status) if status else False
-
-def update_sender_data(row, existing_doc, request_id, current_user, fields, status="pending"):
+def update_sender_data(row, existing_doc, request_id, current_user, fields, status="pending", reply_file_id=None):
     """สร้าง update data สำหรับ sender"""
     updated_at = datetime.datetime.now()
     current_request_ids = existing_doc.get("request_ids", []) if existing_doc else []
@@ -44,26 +41,46 @@ def update_sender_data(row, existing_doc, request_id, current_user, fields, stat
         "updated_at": updated_at
     }
     
-    if status != "skipped" and existing_doc:
+    if existing_doc:
         current_status = existing_doc.get("status", [])
         if is_status_object(current_status):
             status_names = [s["name"] for s in current_status]
+            new_status_list = current_status
         else:
             status_names = current_status
-        if "pending" not in status_names:
-            new_statuses = [
+            new_status_list = [{"name": s, "updated_at": existing_doc.get("updated_at", updated_at)} for s in current_status]
+        
+        if status == "received" and "received" not in status_names:
+            new_status_list.append({"name": "received", "updated_at": updated_at})
+            update_data["status"] = new_status_list
+            if reply_file_id:
+                update_data["reply_file_id"] = reply_file_id
+        elif status == "skipped":
+            update_data["status"] = new_status_list
+        else:
+            if "pending" not in status_names:
+                new_status_list.extend([
+                    {"name": "pending", "updated_at": updated_at},
+                    {"name": "suspension_requested", "updated_at": updated_at}
+                ])
+            update_data["status"] = new_status_list
+    else:
+        if status == "received":
+            update_data["status"] = [{"name": "received", "updated_at": updated_at}]
+            if reply_file_id:
+                update_data["reply_file_id"] = reply_file_id
+        else:
+            update_data["status"] = [
                 {"name": "pending", "updated_at": updated_at},
                 {"name": "suspension_requested", "updated_at": updated_at}
             ]
-            update_data["status"] = current_status + new_statuses if is_status_object(current_status) else new_statuses
-        else:
-            update_data["status"] = current_status
     
     return update_data
 
 def create_request(data: SenderRequest, current_user: dict):
     """สร้างคำขอใหม่และส่ง email ไปยัง กสทช"""
     sender_names = sender_names_collection()
+    response_from_telco = response_from_telco_collection()
     request_id = str(uuid.uuid4())
     updated_at = datetime.datetime.now()
     rows_to_request = []
@@ -75,10 +92,19 @@ def create_request(data: SenderRequest, current_user: dict):
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail=f"Missing sender_name or phone_number in row: {row}")
 
-    # ดึง senders ที่มีอยู่ในฐานข้อมูล
-    sender_map = {
+    # ดึง senders ล่าสุดจาก sender_names และ response_from_telco
+    sender_map = {}
+    for row in data.rows:
+        doc = sender_names.find_one(
+            {"sender_name": row["sender_name"], "phone_number": row["phone_number"]},
+            sort=[("created_at", -1)]
+        )
+        if doc:
+            sender_map[(row["sender_name"], row["phone_number"])] = doc
+    
+    telco_map = {
         (doc["sender_name"], doc["phone_number"]): doc
-        for doc in sender_names.find({
+        for doc in response_from_telco.find({
             "sender_name": {"$in": [row["sender_name"] for row in data.rows]},
             "phone_number": {"$in": [row["phone_number"] for row in data.rows]}
         })
@@ -88,7 +114,9 @@ def create_request(data: SenderRequest, current_user: dict):
         sender_name = row["sender_name"]
         phone_number = row["phone_number"]
         existing_doc = sender_map.get((sender_name, phone_number))
+        telco_doc = telco_map.get((sender_name, phone_number))
 
+        # ตรวจสอบสถานะ received หรือ reply_file_id ใน existing_doc ก่อน
         has_received = False
         if existing_doc:
             current_status = existing_doc.get("status", [])
@@ -102,7 +130,7 @@ def create_request(data: SenderRequest, current_user: dict):
             update_data = update_sender_data(row, existing_doc, request_id, current_user, data.fields, status="skipped")
             bulk_updates.append(
                 UpdateOne(
-                    {"sender_name": sender_name, "phone_number": phone_number},
+                    {"_id": existing_doc["_id"]},
                     {"$set": update_data}
                 )
             )
@@ -111,17 +139,84 @@ def create_request(data: SenderRequest, current_user: dict):
                 "phone_number": phone_number,
                 "reused_request_id": next((req["id"] for req in existing_doc.get("request_ids", []) if req["status"] == "received"), None)
             })
-        else:
-            logger.debug(f"Adding to rows_to_request: {sender_name}, {phone_number}")
-            rows_to_request.append(row)
-            if existing_doc:
-                update_data = update_sender_data(row, existing_doc, request_id, current_user, data.fields)
-                bulk_updates.append(
-                    UpdateOne(
-                        {"sender_name": sender_name, "phone_number": phone_number},
-                        {"$set": update_data}
-                    )
+            create_notification(
+                request_id, sender_name, "skipped", current_user["id"], 
+                updated_at.strftime("%d %B %Y")
+            )
+            continue
+
+        # กรณีมีข้อมูลใน response_from_telco
+        if telco_doc:
+            logger.debug(f"Found existing telco data for: {sender_name}, {phone_number}")
+            current_status = existing_doc.get("status", []) if existing_doc else []
+            if is_status_object(current_status):
+                status_names = [s["name"] for s in current_status]
+                new_status_list = current_status
+            else:
+                status_names = current_status
+                new_status_list = [{"name": s, "updated_at": existing_doc.get("updated_at", updated_at) if existing_doc else updated_at} for s in current_status]
+            
+            # Add pending, suspension_requested, and received if not already present
+            if "pending" not in status_names:
+                new_status_list.extend([
+                    {"name": "pending", "updated_at": updated_at},
+                    {"name": "suspension_requested", "updated_at": updated_at}
+                ])
+            if "received" not in status_names:
+                new_status_list.append({"name": "received", "updated_at": updated_at})
+            
+            update_data = {
+                "request_ids": existing_doc.get("request_ids", []) + [{"id": request_id, "status": "skipped"}] if existing_doc else [{"id": request_id, "status": "skipped"}],
+                "mobile_provider": row.get("mobile_provider", existing_doc.get("mobile_provider") if existing_doc else None),
+                "full_name": row.get("full_name", existing_doc.get("full_name") if existing_doc else None),
+                "date": row.get("date", existing_doc.get("date") if existing_doc else None),
+            }
+            if data.fields:
+                update_data["fields"] = data.fields
+            update_data.update({
+                "created_by": current_user["id"],
+                "updated_at": updated_at,
+                "status": new_status_list,
+                "reply_file_id": telco_doc.get("reply_file_id")
+            })
+            
+            bulk_updates.append(
+                UpdateOne(
+                    {"_id": existing_doc["_id"]} if existing_doc else {"sender_name": sender_name, "phone_number": phone_number},
+                    {"$set": update_data},
+                    upsert=not existing_doc
                 )
+            )
+            existing_data.append({
+                "sender_name": sender_name,
+                "phone_number": phone_number,
+                "reused_request_id": telco_doc.get("request_id")
+            })
+            create_notification(
+                request_id, sender_name, "pending", current_user["id"], 
+                updated_at.strftime("%d %B %Y")
+            )
+            create_notification(
+                request_id, sender_name, "suspension_requested", current_user["id"], 
+                updated_at.strftime("%d %B %Y")
+            )
+            create_notification(
+                request_id, sender_name, "received", current_user["id"], 
+                updated_at.strftime("%d %B %Y")
+            )
+            continue  # Do not add to rows_to_request to avoid sending new email
+
+        # กรณีไม่มีข้อมูลใน response_from_telco และไม่มี received
+        logger.debug(f"Adding to rows_to_request: {sender_name}, {phone_number}")
+        rows_to_request.append(row)
+        if existing_doc:
+            update_data = update_sender_data(row, existing_doc, request_id, current_user, data.fields)
+            bulk_updates.append(
+                UpdateOne(
+                    {"_id": existing_doc["_id"]},
+                    {"$set": update_data}
+                )
+            )
 
     if rows_to_request:
         updated_at_str = updated_at.strftime("%d %B %Y")
@@ -161,9 +256,6 @@ def create_request(data: SenderRequest, current_user: dict):
         sender_names.bulk_write(bulk_updates)
         logger.debug(f"Performed bulk update for {len(bulk_updates)} senders")
 
-    for row in existing_data:
-        create_notification(request_id, row["sender_name"], "skipped", current_user["id"], updated_at.strftime("%d %B %Y"))
-
     return {
         "message": "สร้างคำร้องเรียนใหม่เรียบร้อย",
         "request_id": request_id,
@@ -185,6 +277,7 @@ def mark_notification_read(notification_id: str, current_user: dict):
 def complete_suspension(request_id: str, sender_name: str):
     """ทำเครื่องหมายว่า sender ถูกระงับ"""
     sender_names = sender_names_collection()
+    response_from_telco = response_from_telco_collection()
     doc = sender_names.find_one({"request_ids.id": request_id, "sender_name": sender_name})
     if not doc:
         raise HTTPException(status_code=404, detail="Sender not found for this request")
@@ -217,6 +310,14 @@ def complete_suspension(request_id: str, sender_name: str):
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Sender not found")
     if result.modified_count:
+        response_from_telco.update_one(
+            {"sender_name": sender_name, "request_id": request_id},
+            {
+                "$set": {"updated_at": updated_at},
+                "$push": {"status": {"name": "suspended", "updated_at": updated_at}}
+            },
+            upsert=True
+        )
         create_notification(request_id, sender_name, "suspended", doc["created_by"], updated_at.strftime("%d %B %Y"))
     return {"message": "Suspension completed for sender" if result.modified_count else "Sender already marked as suspended"}
 
@@ -236,45 +337,10 @@ def get_notifications(current_user: dict):
         for doc in notifications.find({"user_id": current_user["id"]}).sort("created_at", -1)
     ]
 
-def get_requests(current_user: dict):
-    """ดึงคำขอของผู้ใช้"""
+def get_available_senders(start: str = None, end: str = None):
+    """ดึงรายการ sender ทั้งหมดในระบบตามช่วงวันที่"""
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
-    requests = sender_names.find({"created_by": current_user["id"]}).sort("created_at", -1)
-    result = []
-    for doc in requests:
-        response = response_from_telco.find_one({
-            "sender_name": doc["sender_name"],
-            "phone_number": doc["phone_number"],
-            "request_id": {"$in": [req["id"] for req in doc.get("request_ids", [])]}
-        })
-        latest_request_id = [req["id"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None
-        status = doc.get("status", [])
-        if not is_status_object(status):
-            status = [{"name": s, "updated_at": doc.get("updated_at", datetime.datetime.now())} for s in status]
-        result.append({
-            "request_id": latest_request_id,
-            "sender_name": doc["sender_name"],
-            "date": doc["updated_at"].strftime("%d %B %Y") if doc.get("updated_at") else None,
-            "sender_created_date": doc.get("date"),
-            "status": [
-                {"name": s["name"], "updated_at": s["updated_at"].strftime("%d %B %Y %H:%M")} 
-                for s in status
-            ],
-            "latest_request_status": next((req["status"] for req in doc.get("request_ids", []) if req["id"] == latest_request_id), None),
-            "data": response.get("data", {}) if response else {},
-            "reply_file_id": str(response.get("reply_file_id", "")) if response else "",
-            "pdf_sent_data_id": str(doc.get("pdf_sent_data_id", "")),
-            "pdf_sent_suspension_id": str(doc.get("pdf_sent_suspension_id", "")),
-            "created_at": doc["created_at"]
-        })
-    return convert_objectid_to_str(result)
-
-from app.utils.helpers import convert_objectid_to_str
-
-def get_available_senders(start: str = None, end: str = None):
-    """ดึง senders ที่มีอยู่ตามช่วงวันที่"""
-    sender_names = sender_names_collection()
     today = datetime.date.today()
     query = {}
     
@@ -302,27 +368,19 @@ def get_available_senders(start: str = None, end: str = None):
         query["updated_at"] = {"$lte": end_date}
     
     return [
-        {
-            "sender_name": doc["sender_name"],
-            "phone_number": doc["phone_number"],
-            "mobile_provider": doc.get("mobile_provider"),
-            "full_name": doc.get("full_name"),
-            "date": doc["updated_at"].strftime("%d %B %Y") if doc.get("updated_at") else None,
-            "sender_created_date": doc.get("date"),
-            "status": [
-                {"name": s["name"], "updated_at": s["updated_at"].strftime("%d %B %Y %H:%M")} 
-                for s in (
-                    doc.get("status", []) if is_status_object(doc.get("status", []))
-                    else [{"name": s, "updated_at": doc.get("updated_at", datetime.datetime.now())} for s in doc.get("status", [])]
-                )
-            ],
-            "latest_request_id": [req["id"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None,
-            "latest_request_status": [req["status"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None,
-            "created_at": doc["created_at"],
-            "updated_at": doc["updated_at"]
-        }
+        format_sender_doc(doc, include_telco_data=True, response_from_telco=response_from_telco)
         for doc in sender_names.find(query, {"_id": 0})
     ]
+
+def get_my_requests(current_user: dict):
+    """ดึงคำขอทั้งหมดของผู้ใช้ปัจจุบัน"""
+    sender_names = sender_names_collection()
+    response_from_telco = response_from_telco_collection()
+    requests = sender_names.find({"created_by": current_user["id"]}).sort("created_at", -1)
+    return convert_objectid_to_str([
+        format_sender_doc(doc, include_telco_data=True, response_from_telco=response_from_telco, include_pdf_ids=True)
+        for doc in requests
+    ])
 
 @router.post("/request")
 def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(get_current_user)):
@@ -340,9 +398,13 @@ def complete_suspension_endpoint(request_id: str, sender_name: str):
 def get_notifications_endpoint(current_user: dict = Depends(get_current_user)):
     return get_notifications(current_user)
 
-@router.get("/requests")
-def get_requests_endpoint(current_user: dict = Depends(get_current_user)):
-    return get_requests(current_user)
+@router.get("/available-senders")
+def get_available_senders_endpoint(start: Optional[str] = Query(None), end: Optional[str] = Query(None)):
+    return get_available_senders(start, end)
+
+@router.get("/my-requests")
+def get_my_requests_endpoint(current_user: dict = Depends(get_current_user)):
+    return get_my_requests(current_user)
 
 @router.get("/file/{file_id}")
 def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
@@ -361,10 +423,6 @@ def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
         return FileResponse(temp_path, media_type=media_type, filename=file_obj.filename)
     except:
         raise HTTPException(status_code=404, detail="ไม่พบไฟล์")
-
-@router.get("/available-senders")
-def get_available_senders_endpoint(start: Optional[str] = Query(None), end: Optional[str] = Query(None)):
-    return get_available_senders(start, end)
 
 @router.on_event("startup")
 async def start_check_replies_loop():

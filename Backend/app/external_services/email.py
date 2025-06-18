@@ -213,6 +213,7 @@ def check_inbox_and_save_reply():
                                                     "phone_number": sender["phone_number"],
                                                     "request_id": request_id,
                                                     "reply_file_id": reply_id,
+                                                    "status": [{"name": "received", "updated_at": updated_at}],
                                                     "data": sender.get("data", {}),
                                                     "created_at": datetime.datetime.now(),
                                                     "updated_at": updated_at

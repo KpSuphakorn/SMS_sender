@@ -5,7 +5,7 @@
 pip install -r requirements.txt
 
 วิธีรัน
-uvicorn main:app --reload
+uvicorn app.main:app --reload
 
 
 
