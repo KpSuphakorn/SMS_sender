@@ -11,7 +11,7 @@ uvicorn app.main:app --reload
 
 ### Frontend
 วิธีติดตั้ง
-pip install
+npm install
 
 วิธีรัน
 npm run dev

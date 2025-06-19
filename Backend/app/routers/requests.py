@@ -1,29 +1,37 @@
-from fastapi import APIRouter, HTTPException, Query, Depends
-from typing import Optional
-from app.schemas.request import SenderRequest
+import os
+import smtplib
+import imaplib
+import email
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.base import MIMEBase
+from email import encoders
+from dotenv import load_dotenv
+from app.models.database import grid_fs
 from app.models.sender_names import sender_names_collection
 from app.models.notification import notifications_collection
 from app.models.response_from_telco import response_from_telco_collection
+import datetime
+import pandas as pd
+from io import BytesIO
+from pymongo import UpdateOne
+from contextlib import contextmanager
+from fastapi import APIRouter, HTTPException, Query, Depends
+from typing import Optional
+from app.schemas.request import SenderRequest
 from app.utils.pdf import generate_custom_pdf_and_store, generate_suspension_pdf
-from app.external_services.email import send_email
+from app.external_services.email import check_inbox_and_save_reply, send_email
 from app.external_services.notification import create_notification
 from app.dependencies import get_current_user
-from app.models.database import grid_fs
 from app.utils.helpers import convert_objectid_to_str, format_sender_doc, is_status_object
 from bson.objectid import ObjectId
-from pymongo import UpdateOne
-import datetime
 import uuid
 import asyncio
-import logging
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from fastapi.responses import FileResponse
 
 router = APIRouter()
 
 def update_sender_data(row, existing_doc, request_id, current_user, fields, status="pending", reply_file_id=None):
-    """สร้าง update data สำหรับ sender"""
     updated_at = datetime.datetime.now()
     current_request_ids = existing_doc.get("request_ids", []) if existing_doc else []
     if len(current_request_ids) >= 5:
@@ -78,7 +86,6 @@ def update_sender_data(row, existing_doc, request_id, current_user, fields, stat
     return update_data
 
 def create_request(data: SenderRequest, current_user: dict):
-    """สร้างคำขอใหม่และส่ง email ไปยัง กสทช"""
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
     request_id = str(uuid.uuid4())
@@ -87,12 +94,10 @@ def create_request(data: SenderRequest, current_user: dict):
     existing_data = []
     bulk_updates = []
 
-    # ตรวจสอบข้อมูล
     for row in data.rows:
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail=f"Missing sender_name or phone_number in row: {row}")
 
-    # ดึง senders ล่าสุดจาก sender_names และ response_from_telco
     sender_map = {}
     for row in data.rows:
         doc = sender_names.find_one(
@@ -116,7 +121,6 @@ def create_request(data: SenderRequest, current_user: dict):
         existing_doc = sender_map.get((sender_name, phone_number))
         telco_doc = telco_map.get((sender_name, phone_number))
 
-        # ตรวจสอบสถานะ received หรือ reply_file_id ใน existing_doc ก่อน
         has_received = False
         if existing_doc:
             current_status = existing_doc.get("status", [])
@@ -126,7 +130,7 @@ def create_request(data: SenderRequest, current_user: dict):
                 has_received = "received" in current_status
 
         if existing_doc and (has_received or existing_doc.get("reply_file_id")):
-            logger.debug(f"Existing sender with received data: {sender_name}, {phone_number}")
+            print(f"Existing sender with received data: {sender_name}, {phone_number}")
             update_data = update_sender_data(row, existing_doc, request_id, current_user, data.fields, status="skipped")
             bulk_updates.append(
                 UpdateOne(
@@ -145,9 +149,8 @@ def create_request(data: SenderRequest, current_user: dict):
             )
             continue
 
-        # กรณีมีข้อมูลใน response_from_telco
         if telco_doc:
-            logger.debug(f"Found existing telco data for: {sender_name}, {phone_number}")
+            print(f"Found existing telco data for: {sender_name}, {phone_number}")
             current_status = existing_doc.get("status", []) if existing_doc else []
             if is_status_object(current_status):
                 status_names = [s["name"] for s in current_status]
@@ -156,7 +159,6 @@ def create_request(data: SenderRequest, current_user: dict):
                 status_names = current_status
                 new_status_list = [{"name": s, "updated_at": existing_doc.get("updated_at", updated_at) if existing_doc else updated_at} for s in current_status]
             
-            # Add pending, suspension_requested, and received if not already present
             if "pending" not in status_names:
                 new_status_list.extend([
                     {"name": "pending", "updated_at": updated_at},
@@ -204,10 +206,9 @@ def create_request(data: SenderRequest, current_user: dict):
                 request_id, sender_name, "received", current_user["id"], 
                 updated_at.strftime("%d %B %Y")
             )
-            continue  # Do not add to rows_to_request to avoid sending new email
+            continue
 
-        # กรณีไม่มีข้อมูลใน response_from_telco และไม่มี received
-        logger.debug(f"Adding to rows_to_request: {sender_name}, {phone_number}")
+        print(f"Adding to rows_to_request: {sender_name}, {phone_number}")
         rows_to_request.append(row)
         if existing_doc:
             update_data = update_sender_data(row, existing_doc, request_id, current_user, data.fields)
@@ -228,7 +229,7 @@ def create_request(data: SenderRequest, current_user: dict):
 
         for row in rows_to_request:
             if not sender_map.get((row["sender_name"], row["phone_number"])):
-                logger.debug(f"Inserting new sender: {row['sender_name']}")
+                print(f"Inserting new sender: {row['sender_name']}")
                 sender_names.insert_one({
                     "sender_name": row["sender_name"],
                     "phone_number": row["phone_number"],
@@ -254,7 +255,7 @@ def create_request(data: SenderRequest, current_user: dict):
 
     if bulk_updates:
         sender_names.bulk_write(bulk_updates)
-        logger.debug(f"Performed bulk update for {len(bulk_updates)} senders")
+        print(f"Performed bulk update for {len(bulk_updates)} senders")
 
     return {
         "message": "สร้างคำร้องเรียนใหม่เรียบร้อย",
@@ -264,7 +265,6 @@ def create_request(data: SenderRequest, current_user: dict):
     }
 
 def mark_notification_read(notification_id: str, current_user: dict):
-    """ทำเครื่องหมายว่า notification อ่านแล้ว"""
     notifications = notifications_collection()
     result = notifications.update_one(
         {"_id": ObjectId(notification_id), "user_id": current_user["id"]},
@@ -275,7 +275,6 @@ def mark_notification_read(notification_id: str, current_user: dict):
     return {"message": "Marked as read" if result.modified_count else "Notification already marked as read"}
 
 def complete_suspension(request_id: str, sender_name: str):
-    """ทำเครื่องหมายว่า sender ถูกระงับ"""
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
     doc = sender_names.find_one({"request_ids.id": request_id, "sender_name": sender_name})
@@ -322,7 +321,6 @@ def complete_suspension(request_id: str, sender_name: str):
     return {"message": "Suspension completed for sender" if result.modified_count else "Sender already marked as suspended"}
 
 def get_notifications(current_user: dict):
-    """ดึง notifications ของผู้ใช้"""
     notifications = notifications_collection()
     return [
         {
@@ -338,7 +336,6 @@ def get_notifications(current_user: dict):
     ]
 
 def get_available_senders(start: str = None, end: str = None):
-    """ดึงรายการ sender ทั้งหมดในระบบตามช่วงวันที่"""
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
     today = datetime.date.today()
@@ -373,7 +370,6 @@ def get_available_senders(start: str = None, end: str = None):
     ]
 
 def get_my_requests(current_user: dict):
-    """ดึงคำขอทั้งหมดของผู้ใช้ปัจจุบัน"""
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
     requests = sender_names.find({"created_by": current_user["id"]}).sort("created_at", -1)
@@ -408,8 +404,6 @@ def get_my_requests_endpoint(current_user: dict = Depends(get_current_user)):
 
 @router.get("/file/{file_id}")
 def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
-    from bson.objectid import ObjectId
-    from fastapi.responses import FileResponse
     try:
         file_obj = grid_fs.get(ObjectId(file_id))
         temp_path = f"/tmp/{file_obj.filename}"
@@ -426,13 +420,12 @@ def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
 
 @router.on_event("startup")
 async def start_check_replies_loop():
-    from app.external_services.email import check_inbox_and_save_reply
     async def loop_check():
         while True:
             try:
                 check_inbox_and_save_reply()
-                logger.info("Checked inbox for replies")
+                print("Checked inbox for replies")
             except Exception as e:
-                logger.error(f"Error in check-inbox loop: {str(e)}")
+                print(f"Error in check-inbox loop: {str(e)}")
             await asyncio.sleep(10)
     asyncio.create_task(loop_check())

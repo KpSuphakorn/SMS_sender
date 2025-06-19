@@ -14,13 +14,8 @@ from app.models.response_from_telco import response_from_telco_collection
 import datetime
 import pandas as pd
 from io import BytesIO
-import logging
 from pymongo import UpdateOne
 from contextlib import contextmanager
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-logging.getLogger("pymongo").setLevel(logging.WARNING)
 
 load_dotenv()
 
@@ -32,7 +27,6 @@ IMAP_SERVER = os.getenv("IMAP_SERVER")
 
 @contextmanager
 def imap_connection():
-    """Context manager สำหรับการเชื่อมต่อ IMAP"""
     mail = imaplib.IMAP4_SSL(IMAP_SERVER)
     try:
         mail.login(SENDER_EMAIL, SENDER_PASSWORD)
@@ -43,7 +37,6 @@ def imap_connection():
 
 @contextmanager
 def smtp_connection():
-    """Context manager สำหรับการเชื่อมต่อ SMTP"""
     server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
     try:
         server.starttls()
@@ -53,7 +46,6 @@ def smtp_connection():
         server.quit()
 
 def send_email(subject, body, file_ids):
-    """ส่ง email พร้อมไฟล์แนบ"""
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
     msg['To'] = os.getenv("RECIPIENT_EMAIL")
@@ -71,13 +63,12 @@ def send_email(subject, body, file_ids):
 
     with smtp_connection() as server:
         server.send_message(msg)
+        print(f"Email sent with subject: {subject}")
 
 def is_status_object(status):
-    """ตรวจสอบว่า status เป็น list ของ object หรือ string"""
     return all(isinstance(s, dict) and "name" in s for s in status) if status else False
 
 def has_final_status(doc, request_id, existing_notifications):
-    """ตรวจสอบว่า sender มีสถานะ final (received/error) หรือไม่"""
     sender_name = doc["sender_name"]
     status = doc.get("status", [])
     if is_status_object(status):
@@ -91,7 +82,6 @@ def has_final_status(doc, request_id, existing_notifications):
     )
 
 def update_sender_status(doc, request_id, is_valid, reply_id):
-    """สร้าง update data สำหรับ sender"""
     updated_at = datetime.datetime.now()
     new_status_name = "received" if is_valid else "error"
     current_status = doc.get("status", [])
@@ -122,7 +112,6 @@ def update_sender_status(doc, request_id, is_valid, reply_id):
     }, new_status_name if new_status else None
 
 def check_inbox_and_save_reply():
-    """ตรวจสอบ inbox และบันทึกไฟล์ตอบกลับ"""
     try:
         with imap_connection() as mail:
             sender_names = sender_names_collection()
@@ -138,7 +127,7 @@ def check_inbox_and_save_reply():
                     req["id"] for req in doc.get("request_ids", []) if req["status"] in ["pending", "suspension_requested"]
                 )
 
-            logger.debug(f"Checking inbox for request_ids: {request_ids}")
+            print(f"Checking inbox for {len(request_ids)} request IDs")
 
             for request_id in request_ids:
                 if not request_id:
@@ -149,12 +138,12 @@ def check_inbox_and_save_reply():
                     "request_ids.status": {"$in": ["pending", "suspension_requested"]}
                 }))
                 if not senders:
-                    logger.debug(f"No senders found for request_id: {request_id}")
+                    print(f"No senders found for request_id: {request_id}")
                     continue
 
                 result, data = mail.search(None, f'(SUBJECT "{request_id}")')
                 if result != 'OK':
-                    logger.debug(f"No emails found for request_id: {request_id}")
+                    print(f"No emails found for request_id: {request_id}")
                     continue
 
                 for num in data[0].split():
@@ -170,7 +159,7 @@ def check_inbox_and_save_reply():
                                 reply_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply")
                                 
                                 matched_senders = check_response_contains_senders(file_data, senders, filename)
-                                logger.debug(f"Matched senders for {filename}: {[s['sender_name'] for s in matched_senders]}")
+                                print(f"Found {len(matched_senders)} matched senders for {filename}")
                                 
                                 existing_notifications = {
                                     (n["sender_name"], n["status"]): n
@@ -189,7 +178,7 @@ def check_inbox_and_save_reply():
                                     updated_at = datetime.datetime.now()
                                     
                                     if has_final_status(doc, request_id, existing_notifications):
-                                        logger.debug(f"Skipping update for {sender_name}: already has final status")
+                                        print(f"Skipping update for {sender_name}: already has final status")
                                         continue
                                     
                                     is_valid = any(s["sender_name"] == sender_name for s in matched_senders)
@@ -232,33 +221,32 @@ def check_inbox_and_save_reply():
                                 
                                 if bulk_updates:
                                     sender_names.bulk_write(bulk_updates)
-                                    logger.debug(f"Performed bulk update for {len(bulk_updates)} senders")
+                                    print(f"Updated {len(bulk_updates)} senders")
                                 
                                 if not any_valid:
                                     grid_fs.delete(reply_id)
-                                    logger.debug(f"Deleted unused file {filename} from GridFS")
+                                    print(f"Deleted unused file {filename}")
                                 
                                 mail.store(num, '+FLAGS', '\\Seen')
                                 break
     except Exception as e:
-        logger.error(f"Error in check_inbox_and_save_reply: {str(e)}")
+        print(f"Error checking inbox: {str(e)}")
 
 def check_response_contains_senders(file_data, senders, filename):
-    """ตรวจสอบว่าไฟล์มีข้อมูล sender หรือไม่"""
     try:
         if filename.lower().endswith(".csv"):
             df = pd.read_csv(BytesIO(file_data))
         else:
             df = pd.read_excel(BytesIO(file_data))
         
-        logger.debug(f"Columns in file {filename}: {list(df.columns)}")
+        print(f"Processing file {filename} with columns: {list(df.columns)}")
         df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_').str.replace(r'[^\w]', '', regex=True)
         
         sender_col = next((col for col in df.columns if any(k in col.lower() for k in ["sender", "sendername", "name"])), None)
         phone_col = next((col for col in df.columns if any(k in col.lower() for k in ["phone", "phonenumber", "number", "mobile"])), None)
         
         if not sender_col or not phone_col:
-            logger.warning(f"No sender_name or phone_number column found in {filename}")
+            print(f"No sender_name or phone_number column found in {filename}")
             return []
 
         df[sender_col] = df[sender_col].astype(str).str.strip().str.lower()
@@ -279,5 +267,5 @@ def check_response_contains_senders(file_data, senders, filename):
         
         return matched_senders
     except Exception as e:
-        logger.error(f"Error processing file {filename}: {str(e)}")
+        print(f"Error processing file {filename}: {str(e)}")
         return []
