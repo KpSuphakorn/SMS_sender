@@ -37,10 +37,9 @@ const initialCases = Array.from({ length: 10 }).map((_, i) => ({
   details: `รายละเอียดของเคส ${i + 1} ...`,
 }));
 
-export default function SelectCasesPage() {
+export default function SendAllCasesPage() {
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const [selected, setSelected] = useState<string[]>([]);
   const [modalCase, setModalCase] = useState<any | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [cases, setCases] = useState(initialCases);
@@ -74,18 +73,10 @@ export default function SelectCasesPage() {
     })();
   }, []);
 
-  const handleCheck = (id: string) => {
-    setSelected((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
-    );
-  };
-
   const handleSubmit = async () => {
     setIsSubmitting(true);
-    // Prepare the selected cases
-    const selectedCases = cases.filter(c => selected.includes(c.id));
     const fields = ["sender_name", "mobile_provider", "phone_number", "full_name", "date"];
-    const rows = selectedCases.map(c => ({
+    const rows = cases.map(c => ({
       sender_name: c.sender,
       mobile_provider: c.telco,
       phone_number: c.phone_number,
@@ -97,7 +88,7 @@ export default function SelectCasesPage() {
       const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2ODRmYjFkY2ZmOTI3OWMwNGJiOTczYmEiLCJlbWFpbCI6InRoYW1AZ21haWwuY29tIiwibmFtZSI6IlRob3JudGhhbiBMZXJkaGlydW53b25nIiwicm9sZSI6InVzZXIiLCJleHAiOjE3NTI5MDUwNTd9.HIkARjQGjQTfeZ5zxAgm4l5hESnGfNhGkNMdRglDezo";
       const res = await createRequest(postData, token);
       alert(`${res.message}\nRequest ID: ${res.request_id}`);
-      // After sending, fetch updated status for the sent cases
+      // After sending, fetch updated status for the cases
       const updated = await getAvailableSenders();
       setCases(prevCases => prevCases.map(c => {
         const item = updated.find((u: any) => u.phone_number === c.phone_number);
@@ -136,7 +127,7 @@ export default function SelectCasesPage() {
       {/* Title and Filter */}
       <div className="w-full max-w-6xl flex flex-col gap-4 mb-6">
         <h1 className="text-4xl font-extrabold underline decoration-blue-500 mb-2">
-          เลือกข้อมูลรายหมายเลขที่จะส่ง
+          ส่งข้อมูลรายวันทั้งหมด
         </h1>
         <div className="flex flex-row items-center gap-4 bg-gray-200 rounded-xl px-4 py-2 w-full max-w-4xl">
           <span className="text-2xl font-bold">ตั้งแต่</span>
@@ -161,7 +152,7 @@ export default function SelectCasesPage() {
         {filteredCases.map((c) => (
           <div
             key={c.id}
-            className={`rounded-2xl shadow-md p-6 mb-6 flex flex-row items-center gap-4 transition cursor-pointer ${selected.includes(c.id) ? "bg-blue-100" : "bg-white"}`}
+            className={`rounded-2xl shadow-md p-6 mb-6 flex flex-row items-center gap-4 transition cursor-pointer bg-white`}
             onClick={e => {
               if ((e.target as HTMLElement).tagName.toLowerCase() !== "input") {
                 setModalCase(c);
@@ -201,14 +192,6 @@ export default function SelectCasesPage() {
                 Case ID : {c.id}
               </div>
             </div>
-            {/* Checkbox */}
-            <input
-              type="checkbox"
-              checked={selected.includes(c.id)}
-              onChange={() => handleCheck(c.id)}
-              className="w-6 h-6 accent-blue-500 cursor-pointer"
-              onClick={e => e.stopPropagation()}
-            />
           </div>
         ))}
       </div>
@@ -218,7 +201,7 @@ export default function SelectCasesPage() {
         <button
           onClick={handleSubmit}
           className={`bg-green-500 hover:bg-green-600 text-white text-xl font-bold rounded-full px-10 py-4 shadow-md transition flex items-center justify-center ${isSubmitting ? 'opacity-60 cursor-not-allowed' : ''}`}
-          disabled={selected.length === 0 || isSubmitting}
+          disabled={isSubmitting}
         >
           {isSubmitting ? (
             <>
@@ -226,10 +209,10 @@ export default function SelectCasesPage() {
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
               </svg>
-              กำลังส่งข้อมูล...
+              กำลังส่งข้อมูลทั้งหมด...
             </>
           ) : (
-            "ส่งข้อมูลที่เลือก"
+            "ส่งข้อมูลทั้งหมด"
           )}
         </button>
       </div>

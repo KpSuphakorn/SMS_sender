@@ -78,7 +78,7 @@ export default function Dashboard() {
         {/* Bubble Chart Placeholder */}
         <div className="bg-white rounded-2xl shadow-md p-8 flex flex-col items-center">
           <div className="text-lg font-semibold mb-2">เปอร์เซ็นต์ค่าย</div>
-          <div className="text-gray-400 text-sm mb-4">Lorem ipsum dolor sit amet, consectetur</div>
+          <div className="text-gray-400 text-sm mb-4">เปอร์เซ็นของเคส แยกตามค่าย</div>
           <div className="flex items-end gap-4">
             <div className="relative">
               <div className="w-20 h-20 bg-blue-300 rounded-full flex items-center justify-center text-white text-xl font-bold">92%<br /><span className="text-xs">DTAC</span></div>

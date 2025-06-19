@@ -1,16 +1,36 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import createRequest from "@/libs/createRequest";
+import getAvailableSenders from "@/libs/getAvailableSenders";
 
 // Dummy data for demonstration
-const dummyCases = Array.from({ length: 10 }).map((_, i) => ({
+const telcos = ["AIS", "TRUE", "DTAC", "NT"];
+const senders = [
+  "Sender A", "Sender B", "Sender C", "Sender D", "Sender E",
+  "Sender F", "Sender G", "Sender H", "Sender I", "Sender J"
+];
+const fullNames = [
+  "นายทดสอบ A", "นายทดสอบ B", "นายทดสอบ C", "นายทดสอบ D", "นายทดสอบ E",
+  "นายทดสอบ F", "นายทดสอบ G", "นายทดสอบ H", "นายทดสอบ I", "นายทดสอบ J"
+];
+const STATUS_LABELS: Record<string, string> = {
+  pending: "ขอข้อมูลแล้ว",
+  suspension_requested: "ขอระงับแล้ว",
+  received: "ได้รับข้อมูลแล้ว",
+  suspended: "ระงับแล้ว"
+};
+
+const initialCases = Array.from({ length: 10 }).map((_, i) => ({
   id: `0x12344${i}`,
-  date: "12-12-25",
-  sender: "Sender name",
-  telco: "AIS",
-  actualTelco: "TRUE",
+  date: `2025-05-${(i+10).toString().slice(-2)}`,
+  sender: senders[i],
+  telco: telcos[i % telcos.length],
+  actualTelco: telcos[(i+1) % telcos.length],
+  phone_number: `08112345${(i+10).toString().slice(-2)}`,
+  full_name: fullNames[i],
   statuses: [
-    { label: "ขอข้อมูลแล้ว", done: true },
-    { label: "ได้รับข้อมูลแล้ว", done: true },
+    { label: "ขอข้อมูลแล้ว", done: false },
+    { label: "ได้รับข้อมูลแล้ว", done: false },
     { label: "ขอระงับแล้ว", done: false },
     { label: "ระงับแล้ว", done: false },
   ],
@@ -22,6 +42,37 @@ export default function SelectCasesPage() {
   const [toDate, setToDate] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
   const [modalCase, setModalCase] = useState<any | null>(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cases, setCases] = useState(initialCases);
+
+  // On first load, fetch latest statuses from DB and update cases
+  useEffect(() => {
+    (async () => {
+      try {
+        const updated = await getAvailableSenders();
+        setCases(prevCases => prevCases.map(c => {
+          const item = updated.find((u: any) => u.phone_number === c.phone_number);
+          if (!item || !item.status) return c;
+          const dbStatusNames = (typeof item.status[0] === "string"
+            ? item.status
+            : item.status.map((s: any) => s.name)
+          );
+          return {
+            ...c,
+            statuses: c.statuses.map(statusEl => {
+              const dbKey = Object.keys(STATUS_LABELS).find(key => STATUS_LABELS[key] === statusEl.label);
+              return {
+                ...statusEl,
+                done: dbKey ? dbStatusNames.includes(dbKey) : false
+              };
+            })
+          };
+        }));
+      } catch (e) {
+        // Optionally handle error
+      }
+    })();
+  }, []);
 
   const handleCheck = (id: string) => {
     setSelected((prev) =>
@@ -29,10 +80,56 @@ export default function SelectCasesPage() {
     );
   };
 
-  const handleSubmit = () => {
-    // Replace with your submit logic
-    alert("Selected case IDs: " + selected.join(", "));
+  const handleSubmit = async () => {
+    setIsSubmitting(true);
+    // Prepare the selected cases
+    const selectedCases = cases.filter(c => selected.includes(c.id));
+    const fields = ["sender_name", "mobile_provider", "phone_number", "full_name", "date"];
+    const rows = selectedCases.map(c => ({
+      sender_name: c.sender,
+      mobile_provider: c.telco,
+      phone_number: c.phone_number,
+      full_name: c.full_name,
+      date: c.date
+    }));
+    const postData = { fields, rows };
+    try {
+      const token = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2ODRmYjFkY2ZmOTI3OWMwNGJiOTczYmEiLCJlbWFpbCI6InRoYW1AZ21haWwuY29tIiwibmFtZSI6IlRob3JudGhhbiBMZXJkaGlydW53b25nIiwicm9sZSI6InVzZXIiLCJleHAiOjE3NTI5MDUwNTd9.HIkARjQGjQTfeZ5zxAgm4l5hESnGfNhGkNMdRglDezo";
+      const res = await createRequest(postData, token);
+      alert(`${res.message}\nRequest ID: ${res.request_id}`);
+      // After sending, fetch updated status for the sent cases
+      const updated = await getAvailableSenders();
+      setCases(prevCases => prevCases.map(c => {
+        const item = updated.find((u: any) => u.phone_number === c.phone_number);
+        if (!item || !item.status) return c;
+        const dbStatusNames = (typeof item.status[0] === "string"
+          ? item.status
+          : item.status.map((s: any) => s.name)
+        );
+        return {
+          ...c,
+          statuses: c.statuses.map(statusEl => {
+            const dbKey = Object.keys(STATUS_LABELS).find(key => STATUS_LABELS[key] === statusEl.label);
+            return {
+              ...statusEl,
+              done: dbKey ? dbStatusNames.includes(dbKey) : false
+            };
+          })
+        };
+      }));
+    } catch (err) {
+      alert("เกิดข้อผิดพลาดในการส่งข้อมูล");
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  // Filter cases by date
+  const filteredCases = cases.filter(c => {
+    if (fromDate && c.date < fromDate) return false;
+    if (toDate && c.date > toDate) return false;
+    return true;
+  });
 
   return (
     <div className="min-h-screen bg-white px-4 py-8 flex flex-col items-center">
@@ -61,7 +158,7 @@ export default function SelectCasesPage() {
 
       {/* Scrollable Cards */}
       <div className="w-full max-w-6xl overflow-y-auto" style={{ maxHeight: "60vh" }}>
-        {dummyCases.map((c) => (
+        {filteredCases.map((c) => (
           <div
             key={c.id}
             className={`rounded-2xl shadow-md p-6 mb-6 flex flex-row items-center gap-4 transition cursor-pointer ${selected.includes(c.id) ? "bg-blue-100" : "bg-white"}`}
@@ -77,7 +174,7 @@ export default function SelectCasesPage() {
                 <div className="flex-1 flex flex-row items-center gap-8">
                   <div>
                     <div className="font-semibold">Sender name</div>
-                    <div className="text-gray-500">{c.telco}</div>
+                    <div className="text-gray-500">{c.sender}</div>
                   </div>
                   <div>
                     <div className="font-semibold">Actual Telco.</div>
@@ -120,10 +217,20 @@ export default function SelectCasesPage() {
       <div className="w-full max-w-6xl flex justify-end mt-8">
         <button
           onClick={handleSubmit}
-          className="bg-green-500 hover:bg-green-600 text-white text-xl font-bold rounded-full px-10 py-4 shadow-md transition"
-          disabled={selected.length === 0}
+          className={`bg-green-500 hover:bg-green-600 text-white text-xl font-bold rounded-full px-10 py-4 shadow-md transition flex items-center justify-center ${isSubmitting ? 'opacity-60 cursor-not-allowed' : ''}`}
+          disabled={selected.length === 0 || isSubmitting}
         >
-          ส่งข้อมูลที่เลือก
+          {isSubmitting ? (
+            <>
+              <svg className="animate-spin h-6 w-6 mr-2 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+              </svg>
+              กำลังส่งข้อมูล...
+            </>
+          ) : (
+            "ส่งข้อมูลที่เลือก"
+          )}
         </button>
       </div>
 
