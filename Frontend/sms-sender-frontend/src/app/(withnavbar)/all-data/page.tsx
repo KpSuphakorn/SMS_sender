@@ -1,6 +1,8 @@
 "use client";
 import { useState, useEffect } from "react";
 import getAvailableSenders from "@/libs/getAvailableSenders";
+import { DatePicker } from "../../../libs/DatePicker";
+import { DatesRangeValue } from "@mantine/dates";
 
 // Helper function to map API status to display status
 const STATUS_ORDER = [
@@ -27,8 +29,7 @@ const mapStatusToDisplay = (statusArray: any[]) => {
 };
 
 export default function AllDataPage() {
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const [dateRange, setDateRange] = useState<DatesRangeValue>([null, null]);
   const [selectedCase, setSelectedCase] = useState<any>(null);
   const [cases, setCases] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -40,11 +41,14 @@ export default function AllDataPage() {
       try {
         setLoading(true);
         setError(null);
-        const data = await getAvailableSenders(fromDate, toDate);
+        // Format dates for the API call, which expects YYYY-MM-DD strings
+        const from = dateRange[0] instanceof Date ? dateRange[0].toISOString().split('T')[0] : "";
+        const to = dateRange[1] instanceof Date ? dateRange[1].toISOString().split('T')[0] : "";
+        const data = await getAvailableSenders(from, to);
         
         // Map API data to card format
-        const mappedCases = data.map((item: any) => ({
-          id: item.sender_name || `case-${item.phone_number}`,
+        const mappedCases = data.map((item: any, idx: number) => ({
+          id: item._id?.$oid || `${item.sender_name}-${idx}`,
           date: item.date,
           sender: item.sender_name,
           telco: item.mobile_provider,
@@ -70,7 +74,7 @@ export default function AllDataPage() {
     };
 
     fetchData();
-  }, [fromDate, toDate]);
+  }, [dateRange]);
 
   // Filter cases based on date range
   const filteredCases = cases;
@@ -105,20 +109,8 @@ export default function AllDataPage() {
           ข้อมูลทั้งหมด
         </h1>
         <div className="flex flex-row items-center gap-4 bg-gray-200 rounded-xl px-4 py-2 w-full max-w-4xl">
-          <span className="text-2xl font-bold">ตั้งแต่</span>
-          <input
-            type="date"
-            className="bg-gray-100 rounded px-3 py-1 text-lg font-semibold"
-            value={fromDate}
-            onChange={e => setFromDate(e.target.value)}
-          />
-          <span className="text-2xl font-bold">ถึง</span>
-          <input
-            type="date"
-            className="bg-gray-100 rounded px-3 py-1 text-lg font-semibold"
-            value={toDate}
-            onChange={e => setToDate(e.target.value)}
-          />
+          <span className="text-2xl font-bold">ช่วงวันที่</span>
+          <DatePicker value={dateRange} onChange={setDateRange} />
         </div>
       </div>
 

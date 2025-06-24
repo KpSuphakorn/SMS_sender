@@ -1,8 +1,120 @@
-"use client";
-import { useState } from "react";
+"use client"
+
+import { useState } from "react"
+import {
+  TrendingUp,
+  TrendingDown,
+  DollarSign,
+  FileCheck,
+  FileClock,
+  AlertTriangle,
+  BarChart3,
+  Users,
+  Calendar,
+} from "lucide-react"
+import {
+  Bar,
+  BarChart,
+  Cell,
+  Pie,
+  ResponsiveContainer,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Legend,
+  PieChart as RechartsPieChart,
+  Tooltip,
+} from "recharts"
+
+// Card Components
+const Card = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
+  <div className={`rounded-lg border bg-white text-gray-900 shadow-sm ${className}`} {...props}>
+    {children}
+  </div>
+)
+
+const CardHeader = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
+  <div className={`flex flex-col space-y-1.5 p-6 ${className}`} {...props}>
+    {children}
+  </div>
+)
+
+const CardTitle = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
+  <h3 className={`text-2xl font-semibold leading-none tracking-tight ${className}`} {...props}>
+    {children}
+  </h3>
+)
+
+const CardDescription = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
+  <div className={`text-sm text-gray-500 ${className}`} {...props}>
+    {children}
+  </div>
+)
+
+const CardContent = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
+  <div className={`p-6 pt-0 ${className}`} {...props}>
+    {children}
+  </div>
+)
+
+// Badge Component
+const Badge = ({ className = "", variant = "default", children, ...props }: { className?: string; variant?: "default" | "secondary"; children: React.ReactNode; [key: string]: any }) => {
+  const variants = {
+    default: "bg-blue-600 text-white hover:bg-blue-700",
+    secondary: "bg-gray-100 text-gray-800 hover:bg-gray-200",
+  }
+
+  return (
+    <span
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${variants[variant]} ${className}`}
+      {...props}
+    >
+      {children}
+    </span>
+  )
+}
+
+// Button Component
+const Button = ({ className = "", variant = "default", size = "default", children, ...props }: { className?: string; variant?: "default" | "outline"; size?: "default" | "sm"; children: React.ReactNode; [key: string]: any }) => {
+  const variants = {
+    default: "bg-blue-600 text-white hover:bg-blue-700",
+    outline: "border border-gray-300 bg-white hover:bg-gray-50 text-gray-700",
+  }
+
+  const sizes = {
+    default: "h-10 px-4 py-2",
+    sm: "h-9 rounded-md px-3",
+  }
+
+  return (
+    <button
+      className={`inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 ${variants[variant]} ${sizes[size]} ${className}`}
+      {...props}
+    >
+      {children}
+    </button>
+  )
+}
+
+// Custom Tooltip Component
+const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="bg-white p-3 border rounded-lg shadow-lg">
+        <p className="font-medium">{label}</p>
+        {payload.map((entry: any, index: number) => (
+          <p key={index} className="text-sm" style={{ color: entry.color }}>
+            {entry.name}: {entry.value}
+          </p>
+        ))}
+      </div>
+    )
+  }
+  return null
+}
 
 export default function Dashboard() {
-  // Dummy data for now
+  // Mock data - structured for easy MongoDB integration
   const [summary, setSummary] = useState({
     totalCases: 12345,
     totalLoss: 35000.4,
@@ -10,145 +122,269 @@ export default function Dashboard() {
     dailyLoss: 35.4,
     docsApproved: 154,
     docsPending: 154,
-  });
+    growthRate: 2.1,
+    lastUpdated: new Date().toISOString(),
+  })
+
+  // Chart data
+  const revenueData = [
+    { month: "Jan", cases: 186, lastWeek: 120 },
+    { month: "Feb", cases: 305, lastWeek: 200 },
+    { month: "Mar", cases: 237, lastWeek: 180 },
+    { month: "Apr", cases: 173, lastWeek: 150 },
+    { month: "May", cases: 209, lastWeek: 190 },
+    { month: "Jun", cases: 314, lastWeek: 250 },
+    { month: "Jul", cases: 290, lastWeek: 220 },
+    { month: "Aug", cases: 425, lastWeek: 300 },
+    { month: "Sep", cases: 380, lastWeek: 280 },
+    { month: "Oct", cases: 456, lastWeek: 350 },
+    { month: "Nov", cases: 398, lastWeek: 320 },
+    { month: "Dec", cases: 520, lastWeek: 400 },
+  ]
+
+  const statusData = [
+    { name: "ระงับแล้ว", value: 40, color: "#6366f1" },
+    { name: "อยู่ระหว่างดำเนินการ", value: 32, color: "#a5b4fc" },
+    { name: "รอดำเนินการ", value: 28, color: "#fbbf24" },
+  ]
+
+  const carrierData = [
+    { name: "TRUE", percentage: 85, cases: 4200, color: "#f97316" },
+    { name: "AIS", percentage: 85, cases: 3800, color: "#8b5cf6" },
+    { name: "DTAC", percentage: 92, cases: 4345, color: "#06b6d4" },
+  ]
+
+  const statCards = [
+    {
+      title: "มูลค่าความเสียหายรวม",
+      value: `$${summary.totalLoss.toLocaleString()}`,
+      icon: DollarSign,
+      trend: "up",
+      trendValue: "12.5%",
+      color: "text-green-600",
+      bgColor: "bg-green-50",
+      iconColor: "text-green-600",
+    },
+    {
+      title: "ความเสียหายเดือนนี้",
+      value: `$${summary.monthlyLoss.toLocaleString()}`,
+      icon: TrendingUp,
+      trend: "down",
+      trendValue: "2.1%",
+      color: "text-blue-600",
+      bgColor: "bg-blue-50",
+      iconColor: "text-blue-600",
+    },
+    {
+      title: "ความเสียหายวันนี้",
+      value: `$${summary.dailyLoss.toLocaleString()}`,
+      icon: AlertTriangle,
+      trend: "up",
+      trendValue: "5.2%",
+      color: "text-orange-600",
+      bgColor: "bg-orange-50",
+      iconColor: "text-orange-600",
+    },
+    {
+      title: "เอกสารที่รับรองแล้ว",
+      value: summary.docsApproved.toLocaleString(),
+      icon: FileCheck,
+      trend: "up",
+      trendValue: "8.1%",
+      color: "text-emerald-600",
+      bgColor: "bg-emerald-50",
+      iconColor: "text-emerald-600",
+    },
+    {
+      title: "เอกสารรอรับรอง",
+      value: summary.docsPending.toLocaleString(),
+      icon: FileClock,
+      trend: "down",
+      trendValue: "3.2%",
+      color: "text-red-600",
+      bgColor: "bg-red-50",
+      iconColor: "text-red-600",
+    },
+    {
+      title: "จำนวนเคสสะสม",
+      value: summary.totalCases.toLocaleString(),
+      icon: Users,
+      trend: "up",
+      trendValue: "15.3%",
+      color: "text-purple-600",
+      bgColor: "bg-purple-50",
+      iconColor: "text-purple-600",
+    },
+  ]
 
   return (
-    <div className="min-h-screen bg-white px-8 py-8">
-      {/* Title */}
-      <h1 className="text-6xl font-extrabold mb-8">DASHBOARD</h1>
-
-      {/* Top Section: Bar Chart & Donut Chart */}
-      <div className="flex flex-col lg:flex-row gap-8 mb-8">
-        {/* Bar Chart Placeholder */}
-        <div className="flex-1 bg-white rounded-2xl shadow-md p-8">
-          <div className="flex justify-between items-center mb-2">
-            <div>
-              <div className="text-lg font-semibold">Revenue</div>
-              <div className="text-2xl font-bold">จำนวนเคส <span className="text-green-500 text-base font-normal ml-2">↑ 2.1% vs last week</span></div>
-              <div className="text-gray-400 text-sm">Sales from 1-12 Dec, 2020</div>
-            </div>
-            <button className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg font-semibold border border-blue-100 hover:bg-blue-100 transition">View Report</button>
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-4 md:p-6 lg:p-8">
+      {/* Header */}
+      <div className="mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <h1 className="text-3xl md:text-4xl font-bold text-slate-900 mb-2">Dashboard Overview</h1>
+            <p className="text-slate-600 flex items-center gap-2">
+              <Calendar className="h-4 w-4" />
+              Last updated: {new Date().toLocaleDateString("th-TH")}
+            </p>
           </div>
-          {/* Bar Chart Placeholder */}
-          <div className="h-48 flex items-end gap-2 mt-6">
-            {[...Array(12)].map((_, i) => (
-              <div key={i} className="flex flex-col items-center">
-                <div className={`w-4 rounded-t bg-blue-400`} style={{ height: `${40 + Math.random() * 80}px` }} />
-                <div className="w-4 h-2 bg-gray-200 rounded-b" />
-                <div className="text-xs text-gray-400 mt-1">{String(i+1).padStart(2, "0")}</div>
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm">
+              <BarChart3 className="h-4 w-4 mr-2" />
+              Export
+            </Button>
+            <Button size="sm">Refresh Data</Button>
+          </div>
+        </div>
+      </div>
+
+      {/* Stats Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
+        {statCards.map((stat, index) => (
+          <Card key={index} className="hover:shadow-lg transition-all duration-300 hover:-translate-y-1">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between">
+                <div className={`p-3 rounded-full ${stat.bgColor}`}>
+                  <stat.icon className={`h-6 w-6 ${stat.iconColor}`} />
+                </div>
+                <Badge variant={stat.trend === "up" ? "default" : "secondary"} className="text-xs">
+                  {stat.trend === "up" ? (
+                    <TrendingUp className="h-3 w-3 mr-1" />
+                  ) : (
+                    <TrendingDown className="h-3 w-3 mr-1" />
+                  )}
+                  {stat.trendValue}
+                </Badge>
+              </div>
+              <div className="mt-4">
+                <p className="text-sm font-medium text-slate-600 mb-1">{stat.title}</p>
+                <p className="text-2xl font-bold text-slate-900">{stat.value}</p>
+              </div>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
+
+      {/* Charts Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        {/* Revenue Chart */}
+        <Card className="hover:shadow-lg transition-shadow duration-300">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <div>
+              <CardTitle className="text-xl font-semibold">จำนวนเคส</CardTitle>
+              <CardDescription className="flex items-center gap-2 mt-2">
+                <Badge variant="secondary" className="text-green-600 bg-green-50">
+                  <TrendingUp className="h-3 w-3 mr-1" />↑ 2.1% vs last week
+                </Badge>
+              </CardDescription>
+            </div>
+            <Button variant="outline" size="sm">
+              View Report
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={revenueData}>
+                  <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Bar dataKey="cases" fill="#3b82f6" radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="lastWeek" fill="#94a3b8" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Status Pie Chart */}
+        <Card className="hover:shadow-lg transition-shadow duration-300">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <div>
+              <CardTitle className="text-xl font-semibold">สถานะเคส</CardTitle>
+              <CardDescription>การกระจายตัวของสถานะเคส</CardDescription>
+            </div>
+            <Button variant="outline" size="sm">
+              View Details
+            </Button>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <RechartsPieChart>
+                  <Pie
+                    data={statusData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={60}
+                    outerRadius={100}
+                    paddingAngle={5}
+                    dataKey="value"
+                  >
+                    {statusData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.color} />
+                    ))}
+                  </Pie>
+                  <Tooltip
+                    content={({ active, payload }: { active?: boolean; payload?: any[] }) => {
+                      if (active && payload && payload.length) {
+                        return (
+                          <div className="bg-white p-3 border rounded-lg shadow-lg">
+                            <p className="font-medium">{payload[0]?.payload?.name}</p>
+                            <p className="text-sm text-slate-600">{payload[0]?.value}%</p>
+                          </div>
+                        )
+                      }
+                      return null
+                    }}
+                  />
+                  <Legend
+                    verticalAlign="bottom"
+                    height={36}
+                    formatter={(value, entry) => (
+                      <span className="text-sm">
+                        {value} ({entry?.payload?.value || 0}%)
+                      </span>
+                    )}
+                  />
+                </RechartsPieChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Carrier Analysis */}
+      <Card className="hover:shadow-lg transition-shadow duration-300">
+        <CardHeader>
+          <CardTitle className="text-xl font-semibold">เปอร์เซ็นต์ค่าย</CardTitle>
+          <CardDescription>เปอร์เซ็นของเคส แยกตามค่าย</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {carrierData.map((carrier, index) => (
+              <div key={index} className="text-center group">
+                <div
+                  className="relative mx-auto mb-4 rounded-full flex items-center justify-center text-white font-bold transition-transform duration-300 group-hover:scale-110 shadow-lg"
+                  style={{
+                    backgroundColor: carrier.color,
+                    width: `${80 + carrier.percentage * 0.8}px`,
+                    height: `${80 + carrier.percentage * 0.8}px`,
+                  }}
+                >
+                  <div className="text-center">
+                    <div className="text-xl font-bold">{carrier.percentage}%</div>
+                    <div className="text-xs opacity-90">{carrier.name}</div>
+                  </div>
+                </div>
+                <div className="text-sm text-slate-600">{carrier.cases.toLocaleString()} เคส</div>
               </div>
             ))}
           </div>
-          <div className="flex gap-4 mt-4 text-sm">
-            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-blue-400 inline-block" /> Last 6 days</div>
-            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 inline-block" /> Last Week</div>
-          </div>
-        </div>
-        {/* Donut Chart Placeholder */}
-        <div className="flex-1 bg-white rounded-2xl shadow-md p-8 flex flex-col items-center justify-center">
-          <div className="flex justify-between w-full mb-2">
-            <div className="text-lg font-semibold">สถานะ</div>
-            <button className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg font-semibold border border-blue-100 hover:bg-blue-100 transition">View Report</button>
-          </div>
-          <div className="flex flex-col items-center">
-            {/* Donut Chart Placeholder */}
-            <div className="relative w-40 h-40">
-              <svg viewBox="0 0 36 36" className="w-full h-full">
-                <circle cx="18" cy="18" r="16" fill="none" stroke="#e5e7eb" strokeWidth="4" />
-                <circle cx="18" cy="18" r="16" fill="none" stroke="#6366f1" strokeWidth="4" strokeDasharray="40,60" strokeDashoffset="0" />
-                <circle cx="18" cy="18" r="16" fill="none" stroke="#a5b4fc" strokeWidth="4" strokeDasharray="32,68" strokeDashoffset="40" />
-                <circle cx="18" cy="18" r="16" fill="none" stroke="#fbbf24" strokeWidth="4" strokeDasharray="28,72" strokeDashoffset="72" />
-              </svg>
-              {/* Tooltip Example */}
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-indigo-900 text-white px-4 py-2 rounded-lg shadow-lg text-center text-sm">
-                Afternoon<br />1pm - 4pm<br /><span className="text-lg font-bold">1,890 orders</span>
-              </div>
-            </div>
-            <div className="flex gap-6 mt-4 text-sm">
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-indigo-400 inline-block" /> ระงับแล้ว 40%</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-indigo-300 inline-block" /> อยู่ระหว่างดำเนินการ 32%</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> รอดำเนินการ 28%</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Lower Section: Bubbles and Cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-        {/* Bubble Chart Placeholder */}
-        <div className="bg-white rounded-2xl shadow-md p-8 flex flex-col items-center">
-          <div className="text-lg font-semibold mb-2">เปอร์เซ็นต์ค่าย</div>
-          <div className="text-gray-400 text-sm mb-4">เปอร์เซ็นของเคส แยกตามค่าย</div>
-          <div className="flex items-end gap-4">
-            <div className="relative">
-              <div className="w-20 h-20 bg-blue-300 rounded-full flex items-center justify-center text-white text-xl font-bold">92%<br /><span className="text-xs">DTAC</span></div>
-            </div>
-            <div className="relative">
-              <div className="w-24 h-24 bg-purple-400 rounded-full flex items-center justify-center text-white text-xl font-bold">85%<br /><span className="text-xs">AIS</span></div>
-            </div>
-            <div className="relative -ml-8">
-              <div className="w-32 h-32 bg-orange-300 rounded-full flex items-center justify-center text-white text-2xl font-bold">85%<br /><span className="text-base">TRUE</span></div>
-            </div>
-          </div>
-        </div>
-        {/* Stat Cards */}
-        <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-indigo-100 text-indigo-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">มูลค่าความเสียหายรวม</div>
-              <div className="text-2xl font-bold">${summary.totalLoss}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-indigo-100 text-indigo-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">ความเสียหายเดือนนี้</div>
-              <div className="text-2xl font-bold">${summary.monthlyLoss}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-indigo-100 text-indigo-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">ความเสียหายวันนี้</div>
-              <div className="text-2xl font-bold">${summary.dailyLoss}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-blue-100 text-blue-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">เอกสารที่รับรองแล้ว</div>
-              <div className="text-2xl font-bold">{summary.docsApproved}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-red-100 text-red-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">เอกสารรอรับรอง</div>
-              <div className="text-2xl font-bold">{summary.docsPending}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-red-100 text-red-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">จำนวนเคสสะสม</div>
-              <div className="text-2xl font-bold">{summary.totalCases}</div>
-            </div>
-          </div>
-        </div>
-      </div>
+        </CardContent>
+      </Card>
     </div>
-  );
+  )
 }
