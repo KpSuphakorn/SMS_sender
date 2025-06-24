@@ -1,8 +1,9 @@
 "use client";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import getAvailableSenders from "@/libs/getAvailableSenders";
 import { DatePicker } from "../../../libs/DatePicker";
 import { DatesRangeValue } from "@mantine/dates";
+import { Popover, Button } from '@mantine/core';
 
 // Helper function to map API status to display status
 const STATUS_ORDER = [
@@ -13,76 +14,224 @@ const STATUS_ORDER = [
 ];
 
 const mapStatusToDisplay = (statusArray: any[]) => {
-  // Convert to object array if needed
-  const statusObjArr = (typeof statusArray[0] === "string")
-    ? statusArray.map(s => ({ name: s }))
-    : statusArray;
+  if (!Array.isArray(statusArray)) return STATUS_ORDER.map(s => ({ label: s.label, done: false }));
+  
+  // Handle both string array and object array formats
+  const statusNames = statusArray.map(s => 
+    typeof s === "string" ? s : s?.name
+  ).filter(Boolean);
 
-  // Create a set of present statuses
-  const present = new Set(statusObjArr.map(s => s.name));
+  const present = new Set(statusNames);
 
-  // Map to full status order, marking as done if present
   return STATUS_ORDER.map(s => ({
     label: s.label,
     done: present.has(s.key)
   }));
 };
 
+// Helper function to check if a date is within range
+const isDateInRange = (dateStr: string, startDate: any, endDate: any): boolean => {
+  if (!startDate && !endDate) return true;
+  
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return false;
+  
+  // Convert start and end dates to proper Date objects
+  const start = startDate ? (startDate instanceof Date ? startDate : new Date(startDate)) : null;
+  const end = endDate ? (endDate instanceof Date ? endDate : new Date(endDate)) : null;
+  
+  // Check if converted dates are valid
+  const isStartValid = start ? !isNaN(start.getTime()) : true;
+  const isEndValid = end ? !isNaN(end.getTime()) : true;
+  
+  if (!isStartValid && !isEndValid) return true;
+  
+  if (start && end && isStartValid && isEndValid) {
+    // Set time to start/end of day for proper comparison
+    const startOfDay = new Date(start);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(end);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    return date >= startOfDay && date <= endOfDay;
+  } else if (start && isStartValid) {
+    const startOfDay = new Date(start);
+    startOfDay.setHours(0, 0, 0, 0);
+    return date >= startOfDay;
+  } else if (end && isEndValid) {
+    const endOfDay = new Date(end);
+    endOfDay.setHours(23, 59, 59, 999);
+    return date <= endOfDay;
+  }
+  
+  return true;
+};
+
+// Helper function to format date range display
+const formatDateRange = (dateRange: DatesRangeValue): string => {
+  const [start, end] = dateRange;
+  
+  const format = (d: any): string => {
+    if (!d) return "";
+    
+    // Handle different date formats
+    let date: Date;
+    if (d instanceof Date) {
+      date = d;
+    } else if (typeof d === 'string') {
+      date = new Date(d);
+    } else if (d && typeof d === 'object' && d.$date) {
+      date = new Date(d.$date);
+    } else {
+      return "";
+    }
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) return "";
+    
+    return date.toLocaleDateString('th-TH');
+  };
+
+  if (!start && !end) return "เลือกช่วงวันที่";
+  if (start && !end) return format(start);
+  if (start && end) return `${format(start)} - ${format(end)}`;
+  return "เลือกช่วงวันที่";
+};
+
+interface CaseData {
+  id: string;
+  date: string;
+  sender: string;
+  telco: string;
+  actualTelco: string;
+  statuses: Array<{ label: string; done: boolean }>;
+  details: string;
+  phone_number: string;
+  created_at: string;
+  updated_at: string;
+  fields: string[];
+  request_ids: Array<{ id: string; status: string }>;
+  reply_file_id?: string;
+  full_name?: string;
+}
+
 export default function AllDataPage() {
   const [dateRange, setDateRange] = useState<DatesRangeValue>([null, null]);
-  const [selectedCase, setSelectedCase] = useState<any>(null);
-  const [cases, setCases] = useState<any[]>([]);
+  const [selectedCase, setSelectedCase] = useState<CaseData | null>(null);
+  const [allCases, setAllCases] = useState<CaseData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [popoverOpened, setPopoverOpened] = useState(false);
+  const [showUnsentOnly, setShowUnsentOnly] = useState(false);
 
-  // Fetch data from API
+  // Memoized filtered cases based on date range and unsent filter
+  const filteredCases = useMemo(() => {
+    let cases = allCases;
+    
+    // Apply date range filter
+    if (dateRange[0] || dateRange[1]) {
+      cases = cases.filter(caseItem => 
+        isDateInRange(caseItem.date, dateRange[0], dateRange[1])
+      );
+    }
+    
+    // Apply unsent filter
+    if (showUnsentOnly) {
+      cases = cases.filter(caseItem => 
+        !caseItem.statuses.some(status => status.done)
+      );
+    }
+    
+    return cases;
+  }, [allCases, dateRange, showUnsentOnly]);
+
+  // Fetch all data from API (only once on component mount)
+  const fetchAllData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setError(null);
+      
+      // Fetch all data without date restrictions
+      const data = await getAvailableSenders("", "");
+      
+      // Map API data to card format
+      const mappedCases: CaseData[] = data.map((item: any, idx: number) => ({
+        id: item._id?.$oid || `${item.sender_name}-${idx}`,
+        date: item.date,
+        sender: item.sender_name || `Sender ${idx + 1}`,
+        telco: item.mobile_provider || 'Unknown',
+        actualTelco: item.mobile_provider || 'Unknown',
+        statuses: mapStatusToDisplay(item.status || []),
+        details: `รายละเอียดของเคส ${item.sender_name || 'Unknown'}\nชื่อเต็ม: ${item.full_name || 'ไม่ระบุ'}\nเบอร์โทร: ${item.phone_number || 'ไม่ระบุ'}\nค่ายมือถือ: ${item.mobile_provider || 'ไม่ระบุ'}\nวันที่สร้าง: ${item.created_at ? new Date(item.created_at.$date || item.created_at).toLocaleString('th-TH') : 'ไม่ระบุ'}\nอัปเดตล่าสุด: ${item.updated_at ? new Date(item.updated_at.$date || item.updated_at).toLocaleString('th-TH') : 'ไม่ระบุ'}`,
+        phone_number: item.phone_number || 'ไม่ระบุ',
+        created_at: item.created_at?.$date || item.created_at || '',
+        updated_at: item.updated_at?.$date || item.updated_at || '',
+        fields: item.fields || [],
+        request_ids: item.request_ids || [],
+        reply_file_id: item.reply_file_id?.$oid || item.reply_file_id,
+        full_name: item.full_name,
+      }));
+      
+      // Sort by date (newest first)
+      mappedCases.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      
+      setAllCases(mappedCases);
+    } catch (err) {
+      console.error('Failed to fetch data:', err);
+      setError('ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  // Fetch data only once on component mount
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        // Format dates for the API call, which expects YYYY-MM-DD strings
-        const from = dateRange[0] instanceof Date ? dateRange[0].toISOString().split('T')[0] : "";
-        const to = dateRange[1] instanceof Date ? dateRange[1].toISOString().split('T')[0] : "";
-        const data = await getAvailableSenders(from, to);
-        
-        // Map API data to card format
-        const mappedCases = data.map((item: any, idx: number) => ({
-          id: item._id?.$oid || `${item.sender_name}-${idx}`,
-          date: item.date,
-          sender: item.sender_name,
-          telco: item.mobile_provider,
-          actualTelco: item.mobile_provider,
-          statuses: mapStatusToDisplay(item.status || []),
-          details: `รายละเอียดของเคส ${item.sender_name}\nเบอร์โทร: ${item.phone_number}\nค่ายมือถือ: ${item.mobile_provider}\nวันที่สร้าง: ${item.created_at}\nอัปเดตล่าสุด: ${item.updated_at}`,
-          // Additional fields from API
-          phone_number: item.phone_number,
-          created_at: item.created_at,
-          updated_at: item.updated_at,
-          fields: item.fields || [],
-          request_ids: item.request_ids || [],
-          reply_file_id: item.reply_file_id,
-        }));
-        
-        setCases(mappedCases);
-      } catch (err) {
-        console.error('Failed to fetch data:', err);
-        setError('Failed to load data. Please try again.');
-      } finally {
-        setLoading(false);
-      }
-    };
+    fetchAllData();
+  }, [fetchAllData]);
 
-    fetchData();
-  }, [dateRange]);
+  // Handle date range change
+  const handleDateRangeChange = useCallback((range: DatesRangeValue) => {
+    setDateRange(range);
+    
+    // Only close popover if both dates are selected or if range is cleared
+    const [start, end] = range;
+    if ((start && end) || (!start && !end)) {
+      setPopoverOpened(false);
+    }
+    // Keep popover open if only start date is selected (waiting for end date)
+  }, []);
 
-  // Filter cases based on date range
-  const filteredCases = cases;
+  // Handle period change
+  const handlePeriodChange = useCallback((newPeriod: 'daily' | 'weekly' | 'monthly') => {
+    setPeriod(newPeriod);
+  }, []);
+
+  // Handle case selection
+  const handleCaseClick = useCallback((caseItem: CaseData) => {
+    setSelectedCase(caseItem);
+  }, []);
+
+  // Handle unsent filter toggle
+  const handleUnsentToggle = useCallback(() => {
+    setShowUnsentOnly(prev => !prev);
+  }, []);
+
+  // Handle modal close
+  const handleModalClose = useCallback(() => {
+    setSelectedCase(null);
+  }, []);
+
+  // Handle refresh
+  const handleRefresh = useCallback(() => {
+    fetchAllData();
+  }, [fetchAllData]);
 
   if (loading) {
     return (
       <div className="min-h-screen bg-white px-4 py-8 flex flex-col items-center justify-center">
-        <div className="text-2xl font-bold">Loading...</div>
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-blue-500 mb-4"></div>
+        <div className="text-2xl font-bold text-gray-600">กำลังโหลดข้อมูล...</div>
       </div>
     );
   }
@@ -90,12 +239,12 @@ export default function AllDataPage() {
   if (error) {
     return (
       <div className="min-h-screen bg-white px-4 py-8 flex flex-col items-center justify-center">
-        <div className="text-2xl font-bold text-red-500">{error}</div>
+        <div className="text-2xl font-bold text-red-500 mb-4">{error}</div>
         <button 
-          onClick={() => window.location.reload()} 
-          className="mt-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600"
+          onClick={handleRefresh}
+          className="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition-colors font-semibold"
         >
-          Retry
+          ลองใหม่อีกครั้ง
         </button>
       </div>
     );
@@ -103,115 +252,263 @@ export default function AllDataPage() {
 
   return (
     <div className="min-h-screen bg-white px-4 py-8 flex flex-col items-center">
-      {/* Title and Filter */}
-      <div className="w-full max-w-6xl flex flex-col gap-4 mb-6">
-        <h1 className="text-4xl font-extrabold underline decoration-blue-500 mb-2">
-          ข้อมูลทั้งหมด
-        </h1>
-        <div className="flex flex-row items-center gap-4 bg-gray-200 rounded-xl px-4 py-2 w-full max-w-4xl">
-          <span className="text-2xl font-bold">ช่วงวันที่</span>
-          <DatePicker value={dateRange} onChange={setDateRange} />
+      {/* Title and Filter Section - Fixed */}
+      <div className="w-full max-w-6xl flex flex-col gap-4 mb-6 bg-white sticky top-0 z-10 pb-4">
+        <div className="flex justify-between items-center">
+          <h1 className="text-4xl font-extrabold underline decoration-blue-500">
+            ข้อมูลทั้งหมด
+          </h1>
+          <button 
+            onClick={handleRefresh}
+            className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 transition-colors font-semibold"
+          >
+            รีเฟรช
+          </button>
+        </div>
+        
+        <div className="flex flex-row items-center gap-4 bg-gray-100 rounded-xl px-4 py-3 w-full">
+          <span className="text-lg font-bold text-gray-700">ตัวกรอง:</span>
+          
+          {/* Unsent Reports Filter Button */}
+          <button
+            onClick={handleUnsentToggle}
+            className={`px-4 py-2 rounded-lg font-semibold border transition-all duration-200 ${
+              showUnsentOnly 
+                ? 'bg-red-600 text-white border-red-700 shadow-md' 
+                : 'bg-white text-red-700 border-red-300 hover:bg-red-50'
+            }`}
+          >
+            รายงานที่ยังไม่เคยส่ง
+          </button>
+          
+          <span className="text-lg font-bold text-gray-700">ช่วงวันที่:</span>
+          
+          {/* DatePicker Popover Button */}
+          <Popover
+            opened={popoverOpened}
+            onChange={setPopoverOpened}
+            position="bottom-start"
+            withArrow
+            shadow="md"
+          >
+            <Popover.Target>
+              <Button
+                variant="outline"
+                onClick={() => setPopoverOpened((o) => !o)}
+                size="md"
+                color="blue"
+                radius="md"
+                className="min-w-48"
+              >
+                {formatDateRange(dateRange)}
+              </Button>
+            </Popover.Target>
+            <Popover.Dropdown>
+              <div className="p-2">
+                <DatePicker
+                  type="range"
+                  value={dateRange}
+                  onChange={handleDateRangeChange}
+                  locale="th"
+                />
+                {/* Show instruction text when only start date is selected */}
+                {dateRange[0] && !dateRange[1] && (
+                  <div className="text-sm text-blue-600 mt-2 text-center">
+                    กรุณาเลือกวันที่สิ้นสุด
+                  </div>
+                )}
+                {/* Manual close button if needed */}
+                <div className="flex justify-end mt-2">
+                  <button
+                    onClick={() => setPopoverOpened(false)}
+                    className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+                  >
+                    ปิด
+                  </button>
+                </div>
+              </div>
+            </Popover.Dropdown>
+          </Popover>
+
+          {/* Clear All Filters Button */}
+          {((dateRange[0] || dateRange[1]) || showUnsentOnly) && (
+            <button
+              onClick={() => {
+                setDateRange([null, null]);
+                setShowUnsentOnly(false);
+                setPopoverOpened(false);
+              }}
+              className="px-3 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors text-sm"
+            >
+              ล้างตัวกรองทั้งหมด
+            </button>
+          )}
+          
+          {/* Period Filter Buttons */}
+          <div className="flex gap-2 ml-auto">
+            {[
+              { key: 'daily', label: 'รายวัน' },
+              { key: 'weekly', label: 'รายสัปดาห์' },
+              { key: 'monthly', label: 'รายเดือน' }
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
+                  period === key 
+                    ? 'bg-blue-600 text-white border-blue-700' 
+                    : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-50'
+                }`}
+                onClick={() => handlePeriodChange(key as 'daily' | 'weekly' | 'monthly')}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Results Summary */}
+        <div className="flex justify-between items-center text-sm text-gray-600">
+          <div>
+            แสดงผล {filteredCases.length} จาก {allCases.length} เคสทั้งหมด
+            {showUnsentOnly && <span className="text-red-600 font-semibold"> (เฉพาะรายงานที่ยังไม่เคยส่ง)</span>}
+          </div>
+          {showUnsentOnly && (
+            <div className="text-red-600 font-semibold">
+              🚨 กำลังแสดงเฉพาะเคสที่ยังไม่มีสถานะ
+            </div>
+          )}
         </div>
       </div>
 
-      {/* Scrollable Cards */}
-      <div className="w-full max-w-6xl overflow-y-auto" style={{ maxHeight: "70vh" }}>
+      {/* Scrollable Cards Section */}
+      <div className="w-full max-w-6xl overflow-y-auto flex-1" style={{ maxHeight: "70vh" }}>
         {filteredCases.length === 0 ? (
-          <div className="text-center text-gray-500 text-xl py-8">
-            No data found for the selected date range.
+          <div className="text-center text-gray-500 text-xl py-12">
+            {allCases.length === 0 ? 
+              'ไม่มีข้อมูลในระบบ' : 
+              showUnsentOnly ? 
+                'ไม่พบรายงานที่ยังไม่เคยส่ง' : 
+                'ไม่พบข้อมูลตามเงื่อนไขที่เลือก'
+            }
           </div>
         ) : (
-          filteredCases.map((c, idx) => (
-            <div
-              key={c.id}
-              className="bg-white rounded-2xl shadow-md p-6 mb-6 flex flex-col gap-2 cursor-pointer hover:bg-gray-50 transition"
-              onClick={() => setSelectedCase(c)}
-            >
-              <div className="flex flex-row items-center gap-8">
-                <div className="text-2xl font-bold w-32">{c.date}</div>
-                <div className="flex-1 flex flex-row items-center gap-8">
-                  <div>
-                    <div className="font-semibold">{c.sender}</div>
-                    <div className="text-gray-500">{c.telco}</div>
+          <div className="space-y-4">
+            {filteredCases.map((caseItem) => (
+              <div
+                key={caseItem.id}
+                className="bg-white rounded-xl shadow-md border border-gray-200 p-6 cursor-pointer hover:shadow-lg hover:border-blue-300 transition-all duration-200"
+                onClick={() => handleCaseClick(caseItem)}
+              >
+                <div className="flex flex-row items-center gap-6">
+                  <div className="text-lg font-bold text-blue-600 min-w-28">
+                    {new Date(caseItem.date).toLocaleDateString('th-TH')}
                   </div>
-                  <div>
-                    <div className="font-semibold">Actual Telco.</div>
-                    <div className="text-gray-500">{c.actualTelco}</div>
+                  
+                  <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                      <div className="font-semibold text-gray-800">{caseItem.sender}</div>
+                      <div className="text-gray-500 text-sm">{caseItem.telco}</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold text-gray-800">Actual Telco</div>
+                      <div className="text-gray-500 text-sm">{caseItem.actualTelco}</div>
+                    </div>
                   </div>
+                  
                   {/* Status Bar */}
-                  <div className="flex-1 flex flex-row items-center gap-2 ml-8">
-                    {c.statuses.map((s: any, i: number) => (
-                      <div key={i} className="flex flex-col items-center">
+                  <div className="flex-1 flex flex-row items-center gap-2 min-w-96">
+                    {caseItem.statuses.map((status, i) => (
+                      <div key={i} className="flex flex-col items-center flex-1">
                         <div
-                          className={`h-2 w-24 rounded-full mb-1 ${
-                            s.done ? "bg-green-500" : "bg-gray-300"
+                          className={`h-2 w-full rounded-full mb-1 transition-colors ${
+                            status.done ? "bg-green-500" : "bg-gray-300"
                           }`}
                         />
                         <span
-                          className={`text-sm font-semibold ${
-                            s.done ? "text-green-700" : "text-gray-500"
+                          className={`text-xs font-medium text-center ${
+                            status.done ? "text-green-700" : "text-gray-500"
                           }`}
                         > 
-                          {s.label}
+                          {status.label}
                         </span>
                       </div>
                     ))}
                   </div>
                 </div>
+                
+                <div className="text-right text-gray-400 text-xs mt-3">
+                  Case ID: {caseItem.id}
+                </div>
               </div>
-              <div className="text-right text-gray-500 text-sm mt-2">
-                Case ID : 
-              </div>
-            </div>
-          ))
+            ))}
+          </div>
         )}
       </div>
 
       {/* Modal */}
       {selectedCase && (
-        <div className="fixed inset-0 bg-black/20 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl shadow-lg p-8 max-w-4xl w-full relative flex flex-row gap-8">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-y-auto relative">
             {/* Close Button */}
             <button
-              className="absolute top-4 right-4 text-5xl font-bold text-gray-400 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full w-14 h-14 flex items-center justify-center transition"
-              onClick={() => setSelectedCase(null)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full w-10 h-10 flex items-center justify-center transition-colors z-10"
+              onClick={handleModalClose}
               aria-label="Close"
             >
               ×
             </button>
-            {/* Left Column: Main Info */}
-            <div className="flex-1">
-              <h2 className="text-2xl font-bold mb-4">รายละเอียดเคส</h2>
-              <div className="mb-2"><b>วันที่:</b> {selectedCase.date}</div>
-              <div className="mb-2"><b>Sender:</b> {selectedCase.sender} ({selectedCase.telco})</div>
-              <div className="mb-2"><b>เบอร์โทร:</b> {selectedCase.phone_number}</div>
-              <div className="mb-2"><b>Actual Telco:</b> {selectedCase.actualTelco}</div>
-              <div className="mb-2"><b>สถานะ:</b>
-                <ul className="list-disc ml-6">
-                  {selectedCase.statuses.map((s: any, i: number) => (
-                    <li key={i} className={s.done ? "text-green-700" : "text-gray-500"}>
-                      {s.label} {s.done ? "✓" : ""}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-            {/* Right Column: รายละเอียดของเคส */}
-            <div className="flex-1 border-l pl-8">
-              <h3 className="text-xl font-bold mb-2">รายละเอียดของเคส</h3>
-              <div className="text-gray-700 whitespace-pre-line">{selectedCase.details}</div>
-              {selectedCase.request_ids && selectedCase.request_ids.length > 0 && (
-                <div className="mt-4">
-                  <h4 className="font-bold mb-2">Request IDs:</h4>
-                  <ul className="list-disc ml-4">
-                    {selectedCase.request_ids.map((req: any, i: number) => (
-                      <li key={i} className="text-sm">
-                        {req.id} - {req.status}
-                      </li>
-                    ))}
-                  </ul>
+            
+            <div className="p-8 flex flex-col lg:flex-row gap-8">
+              {/* Left Column: Main Info */}
+              <div className="flex-1">
+                <h2 className="text-2xl font-bold mb-6 text-gray-800">รายละเอียดเคส</h2>
+                <div className="space-y-3">
+                  <div><span className="font-semibold">วันที่:</span> {new Date(selectedCase.date).toLocaleDateString('th-TH')}</div>
+                  <div><span className="font-semibold">Sender:</span> {selectedCase.sender}</div>
+                  <div><span className="font-semibold">ชื่อเต็ม:</span> {selectedCase.full_name || 'ไม่ระบุ'}</div>
+                  <div><span className="font-semibold">เบอร์โทร:</span> {selectedCase.phone_number}</div>
+                  <div><span className="font-semibold">ค่ายมือถือ:</span> {selectedCase.telco}</div>
+                  <div><span className="font-semibold">Actual Telco:</span> {selectedCase.actualTelco}</div>
+                  <div>
+                    <span className="font-semibold">สถานะ:</span>
+                    <ul className="list-disc ml-6 mt-2 space-y-1">
+                      {selectedCase.statuses.map((status, i) => (
+                        <li key={i} className={`${status.done ? "text-green-700" : "text-gray-500"}`}>
+                          {status.label} {status.done ? "✓" : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 </div>
-              )}
+              </div>
+              
+              {/* Right Column: Additional Details */}
+              <div className="flex-1 border-l border-gray-200 pl-8">
+                <h3 className="text-xl font-bold mb-4 text-gray-800">ข้อมูลเพิ่มเติม</h3>
+                <div className="text-gray-700 whitespace-pre-line text-sm leading-relaxed mb-6">
+                  {selectedCase.details}
+                </div>
+                
+                {selectedCase.request_ids && selectedCase.request_ids.length > 0 && (
+                  <div className="mt-6">
+                    <h4 className="font-bold mb-3 text-gray-800">Request IDs:</h4>
+                    <ul className="space-y-2">
+                      {selectedCase.request_ids.map((req, i) => (
+                        <li key={i} className="text-sm bg-gray-50 p-2 rounded">
+                          <span className="font-mono">{req.id}</span> - 
+                          <span className={`ml-2 px-2 py-1 rounded text-xs ${
+                            req.status === 'completed' ? 'bg-green-100 text-green-800' :
+                            req.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                            'bg-gray-100 text-gray-800'
+                          }`}>
+                            {req.status}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
