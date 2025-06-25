@@ -98,6 +98,20 @@ const formatDateRange = (dateRange: DatesRangeValue): string => {
   return "เลือกช่วงวันที่";
 };
 
+// API function to create request
+const createRequest = async (data: any, tokens: string) => {
+  const URL = process.env.NEXT_PUBLIC_BACKEND_URL || '';
+  const token = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2ODRmYjFkY2ZmOTI3OWMwNGJiOTczYmEiLCJlbWFpbCI6InRoYW1AZ21haWwuY29tIiwibmFtZSI6IlRob3JudGhhbiBMZXJkaGlydW53b25nIiwicm9sZSI6InVzZXIiLCJleHAiOjE3NTM0MTE3MzR9.rvaYFb7UFy9zAIabdaShRstGSuPzxJBi4GtA7EZfjJE`
+  return fetch(`${URL}/api/request`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify(data)
+  }).then(res => res.json());
+};
+
 interface CaseData {
   id: string;
   date: string;
@@ -124,6 +138,12 @@ export default function AllDataPage() {
   const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [popoverOpened, setPopoverOpened] = useState(false);
   const [showUnsentOnly, setShowUnsentOnly] = useState(false);
+  
+  // New state for case selection and submission
+  const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Memoized filtered cases based on date range and unsent filter
   const filteredCases = useMemo(() => {
@@ -145,6 +165,18 @@ export default function AllDataPage() {
     
     return cases;
   }, [allCases, dateRange, showUnsentOnly]);
+
+  // Get currently visible case IDs
+  const visibleCaseIds = useMemo(() => 
+    filteredCases.map(c => c.id), 
+    [filteredCases]
+  );
+
+  // Check if all visible cases are selected
+  const isAllVisibleSelected = useMemo(() => 
+    visibleCaseIds.length > 0 && visibleCaseIds.every(id => selectedCases.has(id)), 
+    [visibleCaseIds, selectedCases]
+  );
 
   // Fetch all data from API (only once on component mount)
   const fetchAllData = useCallback(async () => {
@@ -226,6 +258,106 @@ export default function AllDataPage() {
   const handleRefresh = useCallback(() => {
     fetchAllData();
   }, [fetchAllData]);
+
+  // Handle individual case selection
+  const handleCaseSelection = useCallback((caseId: string, isSelected: boolean) => {
+    setSelectedCases(prev => {
+      const newSet = new Set(prev);
+      if (isSelected) {
+        newSet.add(caseId);
+      } else {
+        newSet.delete(caseId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  // Handle select all toggle
+  const handleSelectAllToggle = useCallback(() => {
+    setSelectedCases(prev => {
+      if (isAllVisibleSelected) {
+        // Deselect all visible cases
+        const newSet = new Set(prev);
+        visibleCaseIds.forEach(id => newSet.delete(id));
+        return newSet;
+      } else {
+        // Select all visible cases
+        const newSet = new Set(prev);
+        visibleCaseIds.forEach(id => newSet.add(id));
+        return newSet;
+      }
+    });
+  }, [isAllVisibleSelected, visibleCaseIds]);
+
+  // Handle submit selected cases
+  const handleSubmit = useCallback(async () => {
+    if (selectedCases.size === 0) {
+      setSubmitError('กรุณาเลือกเคสที่ต้องการส่ง');
+      return;
+    }
+
+    setIsSubmitting(true);
+    setSubmitError(null);
+    setSubmitSuccess(null);
+
+    try {
+      // Get selected case data
+      const selectedCaseData = allCases.filter(c => selectedCases.has(c.id));
+      
+      // Prepare data for API
+      const requestData = {
+        fields: ["sender_name", "mobile_provider", "phone_number", "full_name", "date"],
+        rows: selectedCaseData.map(caseItem => ({
+          sender_name: caseItem.sender,
+          mobile_provider: caseItem.telco,
+          phone_number: caseItem.phone_number,
+          full_name: caseItem.full_name || '',
+          date: caseItem.date
+        }))
+      };
+
+      // Get token (you may need to implement this based on your auth system)
+      const token = localStorage.getItem('token') || '';
+
+      // Submit to API
+      const response = await createRequest(requestData, token);
+      
+      if (response.error) {
+        throw new Error(response.error);
+      }
+
+      // Update status of submitted cases
+      setAllCases(prevCases => 
+        prevCases.map(caseItem => {
+          if (selectedCases.has(caseItem.id)) {
+            // Update the first and third status to "done" (pending)
+            const updatedStatuses = caseItem.statuses.map((status, index) => 
+              (index === 0 || index === 2) ? { ...status, done: true } : status
+            );
+            return { ...caseItem, statuses: updatedStatuses };
+          }
+          return caseItem;
+        })
+      );
+
+      setSubmitSuccess(`ส่งข้อมูล ${selectedCases.size} เคสสำเร็จ`);
+      setSelectedCases(new Set()); // Clear selection
+      
+      // Clear success message after 3 seconds
+      setTimeout(() => setSubmitSuccess(null), 3000);
+
+    } catch (err) {
+      console.error('Submit error:', err);
+      setSubmitError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการส่งข้อมูล');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [selectedCases, allCases]);
+
+  // Clear selection when filters change
+  useEffect(() => {
+    setSelectedCases(new Set());
+  }, [dateRange, showUnsentOnly]);
 
   if (loading) {
     return (
@@ -366,6 +498,65 @@ export default function AllDataPage() {
           </div>
         </div>
 
+        {/* Selection and Submit Section */}
+        {filteredCases.length > 0 && (
+          <div className="flex flex-row items-center gap-4 bg-blue-50 rounded-xl px-4 py-3 w-full">
+            <div className="flex items-center gap-4">
+              {/* Select All Checkbox */}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isAllVisibleSelected}
+                  onChange={handleSelectAllToggle}
+                  className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
+                />
+                <span className="font-semibold text-gray-700">
+                  เลือกทั้งหมด ({filteredCases.length} เคส)
+                </span>
+              </label>
+
+              {/* Selected Count */}
+              {selectedCases.size > 0 && (
+                <span className="text-blue-700 font-semibold">
+                  เลือกแล้ว: {selectedCases.size} เคส
+                </span>
+              )}
+            </div>
+
+            {/* Submit Button */}
+            <div className="flex items-center gap-2 ml-auto">
+              {submitSuccess && (
+                <span className="text-green-600 font-semibold text-sm">
+                  ✓ {submitSuccess}
+                </span>
+              )}
+              {submitError && (
+                <span className="text-red-600 font-semibold text-sm">
+                  ✗ {submitError}
+                </span>
+              )}
+              <button
+                onClick={handleSubmit}
+                disabled={selectedCases.size === 0 || isSubmitting}
+                className={`px-6 py-2 rounded-lg font-semibold transition-all duration-200 ${
+                  selectedCases.size === 0 || isSubmitting
+                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                    : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg'
+                }`}
+              >
+                {isSubmitting ? (
+                  <div className="flex items-center gap-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    กำลังส่ง...
+                  </div>
+                ) : (
+                  `ส่งข้อมูล ${selectedCases.size > 0 ? `(${selectedCases.size})` : ''}`
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Results Summary */}
         <div className="flex justify-between items-center text-sm text-gray-600">
           <div>
@@ -396,43 +587,62 @@ export default function AllDataPage() {
             {filteredCases.map((caseItem) => (
               <div
                 key={caseItem.id}
-                className="bg-white rounded-xl shadow-md border border-gray-200 p-6 cursor-pointer hover:shadow-lg hover:border-blue-300 transition-all duration-200"
-                onClick={() => handleCaseClick(caseItem)}
+                className={`bg-white rounded-xl shadow-md border p-6 transition-all duration-200 ${
+                  selectedCases.has(caseItem.id)
+                    ? 'border-blue-500 bg-blue-50 shadow-lg'
+                    : 'border-gray-200 hover:shadow-lg hover:border-blue-300'
+                }`}
               >
                 <div className="flex flex-row items-center gap-6">
-                  <div className="text-lg font-bold text-blue-600 min-w-28">
-                    {new Date(caseItem.date).toLocaleDateString('th-TH')}
-                  </div>
-                  
-                  <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div>
-                      <div className="font-semibold text-gray-800">{caseItem.sender}</div>
-                      <div className="text-gray-500 text-sm">{caseItem.telco}</div>
+                  {/* Selection Checkbox */}
+                  <label className="flex items-center cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={selectedCases.has(caseItem.id)}
+                      onChange={(e) => handleCaseSelection(caseItem.id, e.target.checked)}
+                      className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </label>
+
+                  <div 
+                    className="flex-1 flex flex-row items-center gap-6 cursor-pointer"
+                    onClick={() => handleCaseClick(caseItem)}
+                  >
+                    <div className="text-lg font-bold text-blue-600 min-w-28">
+                      {new Date(caseItem.date).toLocaleDateString('th-TH')}
                     </div>
-                    <div>
-                      <div className="font-semibold text-gray-800">Actual Telco</div>
-                      <div className="text-gray-500 text-sm">{caseItem.actualTelco}</div>
-                    </div>
-                  </div>
-                  
-                  {/* Status Bar */}
-                  <div className="flex-1 flex flex-row items-center gap-2 min-w-96">
-                    {caseItem.statuses.map((status, i) => (
-                      <div key={i} className="flex flex-col items-center flex-1">
-                        <div
-                          className={`h-2 w-full rounded-full mb-1 transition-colors ${
-                            status.done ? "bg-green-500" : "bg-gray-300"
-                          }`}
-                        />
-                        <span
-                          className={`text-xs font-medium text-center ${
-                            status.done ? "text-green-700" : "text-gray-500"
-                          }`}
-                        > 
-                          {status.label}
-                        </span>
+                    
+                    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <div className="font-semibold text-gray-800">{caseItem.sender}</div>
+                        <div className="text-gray-500 text-sm">{caseItem.telco}</div>
                       </div>
-                    ))}
+                      <div>
+                        <div className="font-semibold text-gray-800">Actual Telco</div>
+                        <div className="text-gray-500 text-sm">{caseItem.actualTelco}</div>
+                      </div>
+                    </div>
+                    
+                    {/* Status Bar */}
+                    <div className="flex-1 flex flex-row items-center gap-2 min-w-96">
+                      {caseItem.statuses.map((status, i) => (
+                        <div key={i} className="flex flex-col items-center flex-1">
+                          <div
+                            className={`h-2 w-full rounded-full mb-1 transition-colors ${
+                              status.done ? "bg-green-500" : "bg-gray-300"
+                            }`}
+                          />
+                          <span
+                            className={`text-xs font-medium text-center ${
+                              status.done ? "text-green-700" : "text-gray-500"
+                            }`}
+                          > 
+                            {status.label}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 </div>
                 
