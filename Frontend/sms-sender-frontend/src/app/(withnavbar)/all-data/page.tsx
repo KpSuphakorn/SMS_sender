@@ -4,6 +4,7 @@ import getAvailableSenders from "@/libs/getAvailableSenders";
 import { DatePicker } from "../../../libs/DatePicker";
 import { DatesRangeValue } from "@mantine/dates";
 import { Popover, Button } from '@mantine/core';
+import { searchData } from '@/libs/search';
 
 // Helper function to map API status to display status
 const STATUS_ORDER = [
@@ -138,6 +139,8 @@ export default function AllDataPage() {
   const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
   const [popoverOpened, setPopoverOpened] = useState(false);
   const [showUnsentOnly, setShowUnsentOnly] = useState(false);
+
+  const [searchTerm, setSearchTerm] = useState<string>('');
   
   // New state for case selection and submission
   const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
@@ -163,8 +166,12 @@ export default function AllDataPage() {
       );
     }
     
+    if (searchTerm) { 
+        cases= searchData(cases, searchTerm); 
+    }
+
     return cases;
-  }, [allCases, dateRange, showUnsentOnly]);
+  }, [allCases, dateRange, showUnsentOnly, searchTerm]);
 
   // Get currently visible case IDs
   const visibleCaseIds = useMemo(() => 
@@ -357,7 +364,7 @@ export default function AllDataPage() {
   // Clear selection when filters change
   useEffect(() => {
     setSelectedCases(new Set());
-  }, [dateRange, showUnsentOnly]);
+  }, [dateRange, showUnsentOnly, searchTerm]);
 
   if (loading) {
     return (
@@ -476,6 +483,15 @@ export default function AllDataPage() {
             </button>
           )}
           
+          {/* Search Input */}
+          <input
+          type="text"
+          placeholder="ค้นหา"
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)} 
+          className="w-auto px-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
+        />
+
           {/* Period Filter Buttons */}
           <div className="flex gap-2 ml-auto">
             {[
