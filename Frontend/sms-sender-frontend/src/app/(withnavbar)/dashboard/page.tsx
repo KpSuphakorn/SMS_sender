@@ -1,154 +1,448 @@
-"use client";
-import { useState } from "react";
+"use client"
 
-export default function Dashboard() {
-  // Dummy data for now
-  const [summary, setSummary] = useState({
-    totalCases: 12345,
-    totalLoss: 35000.4,
-    monthlyLoss: 350.4,
-    dailyLoss: 35.4,
-    docsApproved: 154,
-    docsPending: 154,
+import { useState } from "react";
+import { Pie, Bar, Line } from "react-chartjs-2";
+import {
+  Chart as ChartJS,
+  ArcElement,
+  Tooltip,
+  Legend,
+  BarElement,
+  CategoryScale,
+  LinearScale,
+  LineElement,
+  PointElement,
+} from "chart.js";
+
+ChartJS.register(ArcElement, Tooltip, Legend, BarElement, CategoryScale, LinearScale, LineElement, PointElement);
+
+interface CaseData {
+  senderName: string;
+  caseId?: string;
+  network: string;
+  status: string;
+  reportDate: string;
+  amount: number;
+  assignedTo?: string;
+  approvedBy?: string;
+  isRecurring?: boolean;
+}
+
+interface NetworkData {
+  name: string;
+  totalCases: number;
+  waitingApproval: number;
+  sentToNbtc: number;
+  dataReceived: number;
+  avgResponseTime: number;
+}
+
+export default function FraudDashboard() {
+  const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
+  const [dateFrom, setDateFrom] = useState("2025-06-20");
+  const [dateTo, setDateTo] = useState("2025-06-30");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  // Mock data with more realistic cases
+  const cases: CaseData[] = [
+    { 
+      senderName: "0812345678", 
+      caseId: "CASE112", 
+      network: "AIS", 
+      status: "waiting_approval", 
+      reportDate: "2025-06-24", 
+      amount: 5000,
+      assignedTo: "นาย ก",
+      isRecurring: true
+    },
+    { 
+      senderName: "0891234567", 
+      network: "DTAC", 
+      status: "sent_to_nbtc", 
+      reportDate: "2025-06-24", 
+      amount: 3000,
+      assignedTo: "นาง ข",
+      approvedBy: "ผบ.สมชาย"
+    },
+    { 
+      senderName: "0801234567", 
+      caseId: "CASE115", 
+      network: "TRUE", 
+      status: "data_received", 
+      reportDate: "2025-06-23", 
+      amount: 8000,
+      assignedTo: "นาย ค",
+      approvedBy: "ผบ.สมชาย"
+    },
+    { 
+      senderName: "0812345678", 
+      caseId: "CASE112", 
+      network: "AIS", 
+      status: "sent_to_nbtc", 
+      reportDate: "2025-06-22", 
+      amount: 12000,
+      assignedTo: "นาย ก",
+      approvedBy: "ผบ.สมชาย",
+      isRecurring: true
+    },
+    { 
+      senderName: "0876543210", 
+      network: "TRUE", 
+      status: "waiting_approval", 
+      reportDate: "2025-06-25", 
+      amount: 15000,
+      assignedTo: "นาง ง"
+    },
+    { 
+      senderName: "0898765432", 
+      caseId: "CASE118", 
+      network: "DTAC", 
+      status: "data_received", 
+      reportDate: "2025-06-21", 
+      amount: 7500,
+      assignedTo: "นาย จ",
+      approvedBy: "ผบ.วิชาญ"
+    }
+  ];
+
+  const networks: NetworkData[] = [
+    { name: "AIS", totalCases: 150, waitingApproval: 45, sentToNbtc: 23, dataReceived: 70, avgResponseTime: 3.2 },
+    { name: "DTAC", totalCases: 120, waitingApproval: 35, sentToNbtc: 18, dataReceived: 59, avgResponseTime: 4.1 },
+    { name: "TRUE", totalCases: 130, waitingApproval: 40, sentToNbtc: 20, dataReceived: 60, avgResponseTime: 2.8 },
+  ];
+
+  // Filter cases based on date range and status
+  const filteredCases = cases.filter(case_ => {
+    const caseDate = new Date(case_.reportDate);
+    const fromDate = new Date(dateFrom);
+    const toDate = new Date(dateTo);
+    
+    const dateMatch = caseDate >= fromDate && caseDate <= toDate;
+    const networkMatch = selectedNetwork ? case_.network === selectedNetwork : true;
+    const statusMatch = statusFilter === "all" ? true : case_.status === statusFilter;
+    
+    return dateMatch && networkMatch && statusMatch;
   });
 
+  // Calculate totals from filtered data
+  const totalCases = filteredCases.length;
+  const totalWaiting = filteredCases.filter(c => c.status === 'waiting_approval').length;
+  const totalSent = filteredCases.filter(c => c.status === 'sent_to_nbtc').length;
+  const totalReceived = filteredCases.filter(c => c.status === 'data_received').length;
+  const highValueCases = filteredCases.filter(c => c.amount >= 10000).length;
+
+
+  const dailyLoss = filteredCases.reduce((sum, c) => sum + c.amount, 0);
+
+  // Export function
+  const exportReport = () => {
+    const csvContent = [
+      ["Sender Name", "Case ID", "Network", "Status", "Amount", "Report Date", "Assigned To", "Approved By"].join(","),
+      ...filteredCases.map(case_ => [
+        case_.senderName,
+        case_.caseId || "ไม่มี Case ID",
+        case_.network,
+        getStatusText(case_.status),
+        case_.amount,
+        case_.reportDate,
+        case_.assignedTo || "-",
+        case_.approvedBy || "-"
+      ].join(","))
+    ].join("\n");
+
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `fraud_report_${dateFrom}_to_${dateTo}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const getStatusText = (status: string) => {
+    switch(status) {
+      case 'waiting_approval': return 'รออนุมัติ';
+      case 'sent_to_nbtc': return 'ส่งไป กสทช. แล้ว';
+      case 'data_received': return 'ได้รับข้อมูลจาก กสทช.';
+      default: return status;
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch(status) {
+      case 'waiting_approval': return 'bg-yellow-100 text-yellow-800';
+      case 'sent_to_nbtc': return 'bg-blue-100 text-blue-800';
+      case 'data_received': return 'bg-purple-100 text-purple-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
+
+  // Chart data
+  const filteredNetworks = selectedNetwork ? networks.filter(n => n.name === selectedNetwork) : networks;
+  
+  const getNetworkColors = (networks: NetworkData[]) => {
+    return networks.map(n => {
+      if (n.name === 'AIS') return "#4B5EFC";
+      if (n.name === 'DTAC') return "#10B981";
+      if (n.name === 'TRUE') return "#F59E0B";
+      return "#EF4444";
+    });
+  };
+  
+  const networkDistribution = {
+    labels: filteredNetworks.map(n => n.name),
+    datasets: [{
+      data: filteredNetworks.map(n => n.totalCases),
+      backgroundColor: getNetworkColors(filteredNetworks),
+      borderColor: "#FFFFFF",
+      borderWidth: 2,
+    }],
+  };
+
+  const dailyNewCases = {
+    labels: ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"],
+    datasets: [{
+      label: "เคสใหม่",
+      data: [45, 52, 48, 61, 55, 67, 58],
+      backgroundColor: "#4B5EFC",
+      borderRadius: 6,
+    }],
+  };
+
+  const lossHistory = {
+    labels: ["มิ.ย. 18", "มิ.ย. 19", "มิ.ย. 20", "มิ.ย. 21", "มิ.ย. 22", "มิ.ย. 23", "มิ.ย. 24"],
+    datasets: [{
+      label: "ความเสียหาย (บาท)",
+      data: [280000, 320000, 310000, 340000, 330000, 360000, 350000],
+      borderColor: "#EF4444",
+      backgroundColor: "rgba(239, 68, 68, 0.1)",
+      tension: 0.4,
+      fill: true,
+    }],
+  };
+
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: "bottom" as const,
+        labels: { color: "#374151", font: { size: 12 } }
+      },
+      tooltip: {
+        backgroundColor: "#1F2937",
+        titleColor: "#F9FAFB",
+        bodyColor: "#F9FAFB",
+      }
+    },
+  };
+
+  const pieOptions = {
+    ...chartOptions,
+    onClick: (event: any, elements: any) => {
+      if (elements.length > 0) {
+        const index = elements[0].index;
+        const networkName = filteredNetworks[index]?.name;
+        setSelectedNetwork(selectedNetwork === networkName ? null : networkName);
+      }
+    },
+  };
+
   return (
-    <div className="min-h-screen bg-white px-8 py-8">
-      {/* Title */}
-      <h1 className="text-6xl font-extrabold mb-8">DASHBOARD</h1>
+    <div className="min-h-screen bg-gray-50 p-6">
+      {/* Header */}
+      <header className="flex justify-between items-center mb-8">
+        <div>
+          <h1 className="text-4xl font-bold text-gray-900">FRAUD DASHBOARD</h1>
+          {selectedNetwork && (
+            <p className="text-lg text-gray-600 mt-2">
+              แสดงข้อมูล: {selectedNetwork} 
+              <button 
+                onClick={() => setSelectedNetwork(null)}
+                className="ml-2 text-blue-600 hover:text-blue-800 underline"
+              >
+                (ดูทั้งหมด)
+              </button>
+            </p>
+          )}
+        </div>
+        <div className="flex gap-4">
+          <button 
+            onClick={exportReport}
+            className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-lg flex items-center gap-2"
+          >
+            📊 Export Report
+          </button>
+          <button className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-lg">
+            ดูรายละเอียดเคส
+          </button>
+          <button className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-lg">
+            อนุมัติคำขอ ({totalWaiting})
+          </button>
+        </div>
+      </header>
 
-      {/* Top Section: Bar Chart & Donut Chart */}
-      <div className="flex flex-col lg:flex-row gap-8 mb-8">
-        {/* Bar Chart Placeholder */}
-        <div className="flex-1 bg-white rounded-2xl shadow-md p-8">
-          <div className="flex justify-between items-center mb-2">
-            <div>
-              <div className="text-lg font-semibold">Revenue</div>
-              <div className="text-2xl font-bold">จำนวนเคส <span className="text-green-500 text-base font-normal ml-2">↑ 2.1% vs last week</span></div>
-              <div className="text-gray-400 text-sm">Sales from 1-12 Dec, 2020</div>
-            </div>
-            <button className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg font-semibold border border-blue-100 hover:bg-blue-100 transition">View Report</button>
+      {/* Filters */}
+      <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
+        <h2 className="text-lg font-semibold text-gray-800 mb-4">ตัวกรองข้อมูล</h2>
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">วันที่เริ่มต้น</label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={(e) => setDateFrom(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+            />
           </div>
-          {/* Bar Chart Placeholder */}
-          <div className="h-48 flex items-end gap-2 mt-6">
-            {[...Array(12)].map((_, i) => (
-              <div key={i} className="flex flex-col items-center">
-                <div className={`w-4 rounded-t bg-blue-400`} style={{ height: `${40 + Math.random() * 80}px` }} />
-                <div className="w-4 h-2 bg-gray-200 rounded-b" />
-                <div className="text-xs text-gray-400 mt-1">{String(i+1).padStart(2, "0")}</div>
-              </div>
-            ))}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">วันที่สิ้นสุด</label>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={(e) => setDateTo(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+            />
           </div>
-          <div className="flex gap-4 mt-4 text-sm">
-            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-blue-400 inline-block" /> Last 6 days</div>
-            <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-gray-300 inline-block" /> Last Week</div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">สถานะ</label>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+            >
+              <option value="all">ทั้งหมด</option>
+              <option value="waiting_approval">รออนุมัติ</option>
+              <option value="sent_to_nbtc">ส่งไป กสทช. แล้ว</option>
+              <option value="data_received">ได้รับข้อมูลแล้ว</option>
+            </select>
+          </div>
+          <div className="flex items-end">
+            <button
+              onClick={() => {
+                setDateFrom("2025-06-20");
+                setDateTo("2025-06-30");
+                setStatusFilter("all");
+                setSelectedNetwork(null);
+              }}
+              className="w-full px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
+            >
+              รีเซ็ตตัวกรอง
+            </button>
           </div>
         </div>
-        {/* Donut Chart Placeholder */}
-        <div className="flex-1 bg-white rounded-2xl shadow-md p-8 flex flex-col items-center justify-center">
-          <div className="flex justify-between w-full mb-2">
-            <div className="text-lg font-semibold">สถานะ</div>
-            <button className="px-4 py-2 bg-blue-50 text-blue-600 rounded-lg font-semibold border border-blue-100 hover:bg-blue-100 transition">View Report</button>
-          </div>
-          <div className="flex flex-col items-center">
-            {/* Donut Chart Placeholder */}
-            <div className="relative w-40 h-40">
-              <svg viewBox="0 0 36 36" className="w-full h-full">
-                <circle cx="18" cy="18" r="16" fill="none" stroke="#e5e7eb" strokeWidth="4" />
-                <circle cx="18" cy="18" r="16" fill="none" stroke="#6366f1" strokeWidth="4" strokeDasharray="40,60" strokeDashoffset="0" />
-                <circle cx="18" cy="18" r="16" fill="none" stroke="#a5b4fc" strokeWidth="4" strokeDasharray="32,68" strokeDashoffset="40" />
-                <circle cx="18" cy="18" r="16" fill="none" stroke="#fbbf24" strokeWidth="4" strokeDasharray="28,72" strokeDashoffset="72" />
-              </svg>
-              {/* Tooltip Example */}
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 bg-indigo-900 text-white px-4 py-2 rounded-lg shadow-lg text-center text-sm">
-                Afternoon<br />1pm - 4pm<br /><span className="text-lg font-bold">1,890 orders</span>
-              </div>
+        <div className="mt-4 text-sm text-gray-600">
+          พบข้อมูล: {filteredCases.length} รายการ
+        </div>
+      </div>
+
+      {/* Alert Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-lg">
+          <div className="flex items-center">
+            <div className="text-red-400 text-2xl mr-3">⚠️</div>
+            <div>
+              <p className="text-sm text-red-800 font-medium">รออนุมัติเกิน 3 วัน</p>
+              <p className="text-2xl font-bold text-red-900">
+                {filteredCases.filter(c => c.status === 'waiting_approval' && 
+                  new Date().getTime() - new Date(c.reportDate).getTime() > 3 * 24 * 60 * 60 * 1000).length}
+              </p>
             </div>
-            <div className="flex gap-6 mt-4 text-sm">
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-indigo-400 inline-block" /> ระงับแล้ว 40%</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-indigo-300 inline-block" /> อยู่ระหว่างดำเนินการ 32%</div>
-              <div className="flex items-center gap-2"><span className="w-3 h-3 rounded-full bg-yellow-400 inline-block" /> รอดำเนินการ 28%</div>
+          </div>
+        </div>
+
+        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg">
+          <div className="flex items-center">
+            <div className="text-yellow-400 text-2xl mr-3">📤</div>
+            <div>
+              <p className="text-sm text-yellow-800 font-medium">ส่ง กสทช. เกิน 7 วัน</p>
+              <p className="text-2xl font-bold text-yellow-900">
+                {filteredCases.filter(c => c.status === 'sent_to_nbtc' && 
+                  new Date().getTime() - new Date(c.reportDate).getTime() > 7 * 24 * 60 * 60 * 1000).length}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-lg">
+          <div className="flex items-center">
+            <div className="text-blue-400 text-2xl mr-3">💰</div>
+            <div>
+              <p className="text-sm text-blue-800 font-medium">ความเสียหายรวม</p>
+              <p className="text-2xl font-bold text-blue-900">{dailyLoss.toLocaleString()}</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-green-50 border-l-4 border-green-400 p-4 rounded-lg">
+          <div className="flex items-center">
+            <div className="text-green-400 text-2xl mr-3">✅</div>
+            <div>
+              <p className="text-sm text-green-800 font-medium">ได้รับข้อมูลแล้ว</p>
+              <p className="text-2xl font-bold text-green-900">{totalReceived}</p>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Lower Section: Bubbles and Cards */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
-        {/* Bubble Chart Placeholder */}
-        <div className="bg-white rounded-2xl shadow-md p-8 flex flex-col items-center">
-          <div className="text-lg font-semibold mb-2">เปอร์เซ็นต์ค่าย</div>
-          <div className="text-gray-400 text-sm mb-4">Lorem ipsum dolor sit amet, consectetur</div>
-          <div className="flex items-end gap-4">
-            <div className="relative">
-              <div className="w-20 h-20 bg-blue-300 rounded-full flex items-center justify-center text-white text-xl font-bold">92%<br /><span className="text-xs">DTAC</span></div>
-            </div>
-            <div className="relative">
-              <div className="w-24 h-24 bg-purple-400 rounded-full flex items-center justify-center text-white text-xl font-bold">85%<br /><span className="text-xs">AIS</span></div>
-            </div>
-            <div className="relative -ml-8">
-              <div className="w-32 h-32 bg-orange-300 rounded-full flex items-center justify-center text-white text-2xl font-bold">85%<br /><span className="text-base">TRUE</span></div>
-            </div>
+      {/* Status Cards */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+        <div className="bg-white rounded-xl shadow-md p-6 text-center">
+          <div className="text-blue-500 text-3xl mb-2">📊</div>
+          <div className="text-sm font-medium text-gray-600 mb-1">เคสทั้งหมด</div>
+          <div className="text-2xl font-bold text-gray-900">{totalCases}</div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-md p-6 text-center">
+          <div className="text-yellow-500 text-3xl mb-2">⏳</div>
+          <div className="text-sm font-medium text-gray-600 mb-1">รออนุมัติ</div>
+          <div className="text-2xl font-bold text-gray-900">{totalWaiting}</div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-md p-6 text-center">
+          <div className="text-blue-500 text-3xl mb-2">📤</div>
+          <div className="text-sm font-medium text-gray-600 mb-1">ส่งไป กสทช.</div>
+          <div className="text-2xl font-bold text-gray-900">{totalSent}</div>
+        </div>
+
+        <div className="bg-white rounded-xl shadow-md p-6 text-center">
+          <div className="text-red-500 text-3xl mb-2">🚨</div>
+          <div className="text-sm font-medium text-gray-600 mb-1">เคสมูลค่าสูง</div>
+          <div className="text-2xl font-bold text-gray-900">{highValueCases}</div>
+          <div className="text-xs text-gray-500">≥ 10,000 บาท</div>
+        </div>
+      </div>
+
+      {/* Charts */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+        <div className="bg-white p-6 rounded-xl shadow-lg">
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">
+            การแจกแจงตามเครือข่าย {selectedNetwork && `(${selectedNetwork})`}
+          </h2>
+          <div className="h-64">
+            <Pie data={networkDistribution} options={pieOptions} />
+          </div>
+          <p className="text-xs text-gray-500 mt-2 text-center">คลิกเพื่อกรองข้อมูล</p>
+        </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-lg">
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">เคสใหม่ต่อวัน</h2>
+          <div className="h-64">
+            <Bar data={dailyNewCases} options={chartOptions} />
           </div>
         </div>
-        {/* Stat Cards */}
-        <div className="col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6">
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-indigo-100 text-indigo-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">มูลค่าความเสียหายรวม</div>
-              <div className="text-2xl font-bold">${summary.totalLoss}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-indigo-100 text-indigo-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">ความเสียหายเดือนนี้</div>
-              <div className="text-2xl font-bold">${summary.monthlyLoss}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-indigo-100 text-indigo-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">ความเสียหายวันนี้</div>
-              <div className="text-2xl font-bold">${summary.dailyLoss}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-blue-100 text-blue-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">เอกสารที่รับรองแล้ว</div>
-              <div className="text-2xl font-bold">{summary.docsApproved}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-red-100 text-red-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">เอกสารรอรับรอง</div>
-              <div className="text-2xl font-bold">{summary.docsPending}</div>
-            </div>
-          </div>
-          <div className="bg-white rounded-2xl shadow-md p-6 flex items-center gap-4">
-            <div className="bg-red-100 text-red-500 rounded-full p-4">
-              <svg width="32" height="32" fill="none" viewBox="0 0 24 24"><path d="M12 20v-6m0 0V4m0 10c-4.418 0-8 1.79-8 4v2h16v-2c0-2.21-3.582-4-8-4z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-            <div>
-              <div className="text-gray-400 text-sm">จำนวนเคสสะสม</div>
-              <div className="text-2xl font-bold">{summary.totalCases}</div>
-            </div>
+
+        <div className="bg-white p-6 rounded-xl shadow-lg">
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">แนวโน้มความเสียหาย</h2>
+          <div className="h-64">
+            <Line data={lossHistory} options={chartOptions} />
           </div>
         </div>
       </div>
+
+
     </div>
   );
 }
