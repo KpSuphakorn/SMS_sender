@@ -1,4 +1,4 @@
-"use client"
+"use client";
 
 import { useState } from "react";
 import { Pie, Bar, Line } from "react-chartjs-2";
@@ -47,6 +47,10 @@ export default function Dashboard() {
     new Date(2025, 5, 20), // June 20, 2025
     new Date(2025, 5, 30)  // June 30, 2025
   ]);
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [selectedDate, setSelectedDate] = useState<string | null>(null); // For chart date filtering
+  const [highValueFilter, setHighValueFilter] = useState<boolean>(false); // For high-value cases
+  const [overdueFilter, setOverdueFilter] = useState<"waiting_3days" | "sent_7days" | null>(null); // For overdue cases
 
   const handleDateRangeChange = (value: [string | null, string | null]) => {
     const convertedRange: [Date | null, Date | null] = [
@@ -54,8 +58,8 @@ export default function Dashboard() {
       value[1] ? new Date(value[1]) : null
     ];
     setDateRange(convertedRange);
+    setSelectedDate(null); // Clear specific date filter when date range changes
   };
-  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   // Mock data with more realistic cases
   const cases: CaseData[] = [
@@ -125,17 +129,29 @@ export default function Dashboard() {
     { name: "TRUE", totalCases: 130, waitingApproval: 40, sentToNbtc: 20, dataReceived: 60, avgResponseTime: 2.8 },
   ];
 
-  // Filter cases based on date range and status
+  // Filter cases based on all criteria
   const filteredCases = cases.filter(case_ => {
     const caseDate = new Date(case_.reportDate);
     const [fromDate, toDate] = dateRange;
     
-    const dateMatch = fromDate && toDate ? 
-      caseDate >= fromDate && caseDate <= toDate : true;
+    const dateMatch = selectedDate 
+      ? case_.reportDate === selectedDate
+      : fromDate && toDate 
+      ? caseDate >= fromDate && caseDate <= toDate 
+      : true;
+    
     const networkMatch = selectedNetwork ? case_.network === selectedNetwork : true;
     const statusMatch = statusFilter === "all" ? true : case_.status === statusFilter;
+    const highValueMatch = highValueFilter ? case_.amount >= 10000 : true;
     
-    return dateMatch && networkMatch && statusMatch;
+    const overdueMatch = overdueFilter 
+      ? (overdueFilter === "waiting_3days" && case_.status === "waiting_approval" && 
+         new Date().getTime() - new Date(case_.reportDate).getTime() > 3 * 24 * 60 * 60 * 1000) ||
+        (overdueFilter === "sent_7days" && case_.status === "sent_to_nbtc" && 
+         new Date().getTime() - new Date(case_.reportDate).getTime() > 7 * 24 * 60 * 60 * 1000)
+      : true;
+
+    return dateMatch && networkMatch && statusMatch && highValueMatch && overdueMatch;
   });
 
   // Calculate totals from filtered data
@@ -144,7 +160,6 @@ export default function Dashboard() {
   const totalSent = filteredCases.filter(c => c.status === 'sent_to_nbtc').length;
   const totalReceived = filteredCases.filter(c => c.status === 'data_received').length;
   const highValueCases = filteredCases.filter(c => c.amount >= 10000).length;
-
   const dailyLoss = filteredCases.reduce((sum, c) => sum + c.amount, 0);
 
   // Export function
@@ -267,6 +282,43 @@ export default function Dashboard() {
     },
   };
 
+  const barOptions = {
+    ...chartOptions,
+    onClick: (event: any, elements: any) => {
+      if (elements.length > 0) {
+        const index = elements[0].index;
+        const dayOffset = index; // Assuming Monday (จ) is 0 days from start of week
+        const startDate = new Date(dateRange[0] || new Date(2025, 5, 20));
+        const selected = new Date(startDate);
+        selected.setDate(startDate.getDate() + dayOffset);
+        setSelectedDate(selected.toISOString().split('T')[0]);
+      }
+    },
+  };
+
+  const lineOptions = {
+    ...chartOptions,
+    onClick: (event: any, elements: any) => {
+      if (elements.length > 0) {
+        const index = elements[0].index;
+        const dateLabel = lossHistory.labels[index]; // e.g., "มิ.ย. 24"
+        const day = parseInt(dateLabel.split(" ")[1]);
+        const selected = new Date(2025, 5, day); // June 2025
+        setSelectedDate(selected.toISOString().split('T')[0]);
+      }
+    },
+  };
+
+  // Reset all filters
+  const resetFilters = () => {
+    setDateRange([new Date(2025, 5, 20), new Date(2025, 5, 30)]);
+    setStatusFilter("all");
+    setSelectedNetwork(null);
+    setSelectedDate(null);
+    setHighValueFilter(false);
+    setOverdueFilter(null);
+  };
+
   return (
     <MantineProvider>
       <div className="min-h-screen bg-gray-50 p-6">
@@ -307,7 +359,9 @@ export default function Dashboard() {
           <h2 className="text-lg font-semibold text-gray-800 mb-4">ตัวกรองข้อมูล</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
             <div className="flex flex-col">
-              <label className="block text-sm font-medium text-gray-700 mb-2">ช่วงเวลา</label>
+              <label className={`block text-sm font-medium mb-2 ${dateRange[0] && dateRange[1] ? 'text-blue-600' : 'text-gray-700'}`}>
+                ช่วงเวลา
+              </label>
               <DatePickerInput
                 type="range"
                 value={[
@@ -321,7 +375,8 @@ export default function Dashboard() {
                 radius="md"
                 styles={{
                   input: {
-                    border: '1px solid #d1d5db',
+                    border: `1px solid ${dateRange[0] && dateRange[1] ? '#3b82f6' : '#d1d5db'}`,
+                    backgroundColor: dateRange[0] && dateRange[1] ? '#eff6ff' : '#ffffff',
                     height: '44px',
                     '&:focus': {
                       borderColor: '#3b82f6',
@@ -332,11 +387,15 @@ export default function Dashboard() {
               />
             </div>
             <div className="flex flex-col">
-              <label className="block text-sm font-medium text-gray-700 mb-2">สถานะ</label>
+              <label className={`block text-sm font-medium mb-2 ${statusFilter !== 'all' ? 'text-blue-600' : 'text-gray-700'}`}>
+                สถานะ
+              </label>
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="w-full px-3 py-2 h-[44px] border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white text-gray-900"
+                className={`w-full px-3 py-2 h-[44px] border rounded-lg focus:ring-blue-500 focus:border-blue-500 text-gray-900 ${
+                  statusFilter !== 'all' ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white'
+                }`}
               >
                 <option value="all">ทั้งหมด</option>
                 <option value="waiting_approval">รออนุมัติ</option>
@@ -345,11 +404,15 @@ export default function Dashboard() {
               </select>
             </div>
             <div className="flex flex-col">
-              <label className="block text-sm font-medium text-gray-700 mb-2">เครือข่าย</label>
+              <label className={`block text-sm font-medium mb-2 ${selectedNetwork ? 'text-blue-600' : 'text-gray-700'}`}>
+                เครือข่าย
+              </label>
               <select
                 value={selectedNetwork || "all"}
                 onChange={(e) => setSelectedNetwork(e.target.value === "all" ? null : e.target.value)}
-                className="w-full px-3 py-2 h-[44px] border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white text-gray-900"
+                className={`w-full px-3 py-2 h-[44px] border rounded-lg focus:ring-blue-500 focus:border-blue-500 text-gray-900 ${
+                  selectedNetwork ? 'border-blue-500 bg-blue-50' : 'border-gray-300 bg-white'
+                }`}
               >
                 <option value="all">ทั้งหมด</option>
                 <option value="AIS">AIS</option>
@@ -358,14 +421,10 @@ export default function Dashboard() {
               </select>
             </div>
             <div className="flex flex-col">
-              <label className="block text-sm font-medium text-gray-700 mb-2">&nbsp;</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2"> </label>
               <button
-                onClick={() => {
-                  setDateRange([new Date(2025, 5, 20), new Date(2025, 5, 30)]);
-                  setStatusFilter("all");
-                  setSelectedNetwork(null);
-                }}
-                className="w-full px-4 py-2 h-[44px] bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors font-medium"
+                onClick={resetFilters}
+                className="w-full px-4 py-2 h-[44px] bg-red-500 text-white rounded-lg hover:bg-red-600 transition-colors font-medium"
               >
                 รีเซ็ตตัวกรอง
               </button>
@@ -377,24 +436,46 @@ export default function Dashboard() {
                 <span className="text-gray-600">พบข้อมูล:</span>
                 <span className="font-semibold text-blue-600">{filteredCases.length} รายการ</span>
               </div>
-              {dateRange[0] && dateRange[1] && (
+              {dateRange[0] && dateRange[1] && !selectedDate && (
                 <div className="flex items-center gap-2">
-                  <span className="text-gray-600">ช่วงเวลา:</span>
-                  <span className="font-medium text-gray-800">
-                    {dateRange[0] instanceof Date ? dateRange[0].toLocaleDateString('th-TH') : dateRange[0]} - {dateRange[1] instanceof Date ? dateRange[1].toLocaleDateString('th-TH') : dateRange[1]}
+                  <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-md font-medium">
+                    ช่วงเวลา: {dateRange[0] instanceof Date ? dateRange[0].toLocaleDateString('th-TH') : dateRange[0]} - {dateRange[1] instanceof Date ? dateRange[1].toLocaleDateString('th-TH') : dateRange[1]}
+                  </span>
+                </div>
+              )}
+              {selectedDate && (
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-md font-medium">
+                    วันที่: {new Date(selectedDate).toLocaleDateString('th-TH')}
                   </span>
                 </div>
               )}
               {selectedNetwork && (
                 <div className="flex items-center gap-2">
-                  <span className="text-gray-600">เครือข่าย:</span>
-                  <span className="font-medium text-gray-800">{selectedNetwork}</span>
+                  <span className="px-2 py-1 bg-green-100 text-green-800 rounded-md font-medium">
+                    เครือข่าย: {selectedNetwork}
+                  </span>
                 </div>
               )}
               {statusFilter !== "all" && (
                 <div className="flex items-center gap-2">
-                  <span className="text-gray-600">สถานะ:</span>
-                  <span className="font-medium text-gray-800">{getStatusText(statusFilter)}</span>
+                  <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-md font-medium">
+                    สถานะ: {getStatusText(statusFilter)}
+                  </span>
+                </div>
+              )}
+              {highValueFilter && (
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-1 bg-red-100 text-red-800 rounded-md font-medium">
+                    มูลค่า: ≥ 10,000 บาท
+                  </span>
+                </div>
+              )}
+              {overdueFilter && (
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-1 bg-yellow-100 text-yellow-800 rounded-md font-medium">
+                    สถานะล่าช้า: {overdueFilter === "waiting_3days" ? "รออนุมัติเกิน 3 วัน" : "ส่ง กสทช. เกิน 7 วัน"}
+                  </span>
                 </div>
               )}
             </div>
@@ -403,7 +484,10 @@ export default function Dashboard() {
 
         {/* Alert Cards */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-          <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-lg">
+          <div 
+            className="bg-red-50 border-l-4 border-red-400 p-4 rounded-lg cursor-pointer hover:bg-red-100"
+            onClick={() => setOverdueFilter(overdueFilter === "waiting_3days" ? null : "waiting_3days")}
+          >
             <div className="flex items-center">
               <div className="text-red-400 text-2xl mr-3">⚠️</div>
               <div>
@@ -416,7 +500,10 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg">
+          <div 
+            className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg cursor-pointer hover:bg-yellow-100"
+            onClick={() => setOverdueFilter(overdueFilter === "sent_7days" ? null : "sent_7days")}
+          >
             <div className="flex items-center">
               <div className="text-yellow-400 text-2xl mr-3">📤</div>
               <div>
@@ -439,7 +526,10 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <div className="bg-green-50 border-l-4 border-green-400 p-4 rounded-lg">
+          <div 
+            className="bg-green-50 border-l-4 border-green-400 p-4 rounded-lg cursor-pointer hover:bg-green-100"
+            onClick={() => setStatusFilter(statusFilter === "data_received" ? "all" : "data_received")}
+          >
             <div className="flex items-center">
               <div className="text-green-400 text-2xl mr-3">✅</div>
               <div>
@@ -452,25 +542,37 @@ export default function Dashboard() {
 
         {/* Status Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+          <div 
+            className="bg-white rounded-xl shadow-md p-6 text-center cursor-pointer hover:bg-gray-50"
+            onClick={() => setStatusFilter(statusFilter === "all" ? "all" : "all")}
+          >
             <div className="text-blue-500 text-3xl mb-2">📊</div>
             <div className="text-sm font-medium text-gray-600 mb-1">เคสทั้งหมด</div>
             <div className="text-2xl font-bold text-gray-900">{totalCases}</div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+          <div 
+            className="bg-white rounded-xl shadow-md p-6 text-center cursor-pointer hover:bg-gray-50"
+            onClick={() => setStatusFilter(statusFilter === "waiting_approval" ? "all" : "waiting_approval")}
+          >
             <div className="text-yellow-500 text-3xl mb-2">⏳</div>
             <div className="text-sm font-medium text-gray-600 mb-1">รออนุมัติ</div>
             <div className="text-2xl font-bold text-gray-900">{totalWaiting}</div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+          <div 
+            className="bg-white rounded-xl shadow-md p-6 text-center cursor-pointer hover:bg-gray-50"
+            onClick={() => setStatusFilter(statusFilter === "sent_to_nbtc" ? "all" : "sent_to_nbtc")}
+          >
             <div className="text-blue-500 text-3xl mb-2">📤</div>
             <div className="text-sm font-medium text-gray-600 mb-1">ส่งไป กสทช.</div>
             <div className="text-2xl font-bold text-gray-900">{totalSent}</div>
           </div>
 
-          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+          <div 
+            className="bg-white rounded-xl shadow-md p-6 text-center cursor-pointer hover:bg-gray-50"
+            onClick={() => setHighValueFilter(!highValueFilter)}
+          >
             <div className="text-red-500 text-3xl mb-2">🚨</div>
             <div className="text-sm font-medium text-gray-600 mb-1">เคสมูลค่าสูง</div>
             <div className="text-2xl font-bold text-gray-900">{highValueCases}</div>
@@ -493,15 +595,17 @@ export default function Dashboard() {
           <div className="bg-white p-6 rounded-xl shadow-lg">
             <h2 className="text-lg font-semibold text-gray-800 mb-4">เคสใหม่ต่อวัน</h2>
             <div className="h-64">
-              <Bar data={dailyNewCases} options={chartOptions} />
+              <Bar data={dailyNewCases} options={barOptions} />
             </div>
+            <p className="text-xs text-gray-500 mt-2 text-center">คลิกเพื่อกรองตามวัน</p>
           </div>
 
           <div className="bg-white p-6 rounded-xl shadow-lg">
             <h2 className="text-lg font-semibold text-gray-800 mb-4">แนวโน้มความเสียหาย</h2>
             <div className="h-64">
-              <Line data={lossHistory} options={chartOptions} />
+              <Line data={lossHistory} options={lineOptions} />
             </div>
+            <p className="text-xs text-gray-500 mt-2 text-center">คลิกเพื่อกรองตามวันที่</p>
           </div>
         </div>
       </div>
