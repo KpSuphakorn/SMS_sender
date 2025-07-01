@@ -21,7 +21,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
             <Link href="/mainmenu" className="flex items-center space-x-3 flex-shrink-0 group">
               <Image src="/ccib-logo.png" alt="CCIB Logo" width={40} height={40} className="rounded-full group-hover:scale-105 transition-transform duration-200" />
               <h1 className="text-2xl font-bold text-gray-900 group-hover:text-blue-600 transition-colors duration-200 cursor-pointer">
-                MyApp
+                SMS-Sender Platform
               </h1>
             </Link>
 
