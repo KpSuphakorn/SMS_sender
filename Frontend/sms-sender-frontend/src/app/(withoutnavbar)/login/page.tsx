@@ -13,10 +13,10 @@ export default function LoginPage() {
 
   const handleLogin = async () => {
     const res = await signIn("credentials", {
-      redirect: false,
+      redirect: true,
       email,
       password,
-      callbackUrl: "/",
+      callbackUrl: "/mainmenu",
     });
 
     if (res?.error) {
