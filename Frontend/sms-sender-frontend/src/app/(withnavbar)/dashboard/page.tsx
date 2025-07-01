@@ -1,390 +1,510 @@
 "use client"
 
-import { useState } from "react"
+import { useState } from "react";
+import { Pie, Bar, Line } from "react-chartjs-2";
 import {
-  TrendingUp,
-  TrendingDown,
-  DollarSign,
-  FileCheck,
-  FileClock,
-  AlertTriangle,
-  BarChart3,
-  Users,
-  Calendar,
-} from "lucide-react"
-import {
-  Bar,
-  BarChart,
-  Cell,
-  Pie,
-  ResponsiveContainer,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Legend,
-  PieChart as RechartsPieChart,
+  Chart as ChartJS,
+  ArcElement,
   Tooltip,
-} from "recharts"
+  Legend,
+  BarElement,
+  CategoryScale,
+  LinearScale,
+  LineElement,
+  PointElement,
+} from "chart.js";
+import { DatePickerInput } from '@mantine/dates';
+import { MantineProvider } from '@mantine/core';
+import '@mantine/core/styles.css';
+import '@mantine/dates/styles.css';
 
-// Card Components
-const Card = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
-  <div className={`rounded-lg border bg-white text-gray-900 shadow-sm ${className}`} {...props}>
-    {children}
-  </div>
-)
+ChartJS.register(ArcElement, Tooltip, Legend, BarElement, CategoryScale, LinearScale, LineElement, PointElement);
 
-const CardHeader = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
-  <div className={`flex flex-col space-y-1.5 p-6 ${className}`} {...props}>
-    {children}
-  </div>
-)
-
-const CardTitle = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
-  <h3 className={`text-2xl font-semibold leading-none tracking-tight ${className}`} {...props}>
-    {children}
-  </h3>
-)
-
-const CardDescription = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
-  <div className={`text-sm text-gray-500 ${className}`} {...props}>
-    {children}
-  </div>
-)
-
-const CardContent = ({ className = "", children, ...props }: { className?: string; children: React.ReactNode; [key: string]: any }) => (
-  <div className={`p-6 pt-0 ${className}`} {...props}>
-    {children}
-  </div>
-)
-
-// Badge Component
-const Badge = ({ className = "", variant = "default", children, ...props }: { className?: string; variant?: "default" | "secondary"; children: React.ReactNode; [key: string]: any }) => {
-  const variants = {
-    default: "bg-blue-600 text-white hover:bg-blue-700",
-    secondary: "bg-gray-100 text-gray-800 hover:bg-gray-200",
-  }
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${variants[variant]} ${className}`}
-      {...props}
-    >
-      {children}
-    </span>
-  )
+interface CaseData {
+  senderName: string;
+  caseId?: string;
+  network: string;
+  status: string;
+  reportDate: string;
+  amount: number;
+  assignedTo?: string;
+  approvedBy?: string;
+  isRecurring?: boolean;
 }
 
-// Button Component
-const Button = ({ className = "", variant = "default", size = "default", children, ...props }: { className?: string; variant?: "default" | "outline"; size?: "default" | "sm"; children: React.ReactNode; [key: string]: any }) => {
-  const variants = {
-    default: "bg-blue-600 text-white hover:bg-blue-700",
-    outline: "border border-gray-300 bg-white hover:bg-gray-50 text-gray-700",
-  }
-
-  const sizes = {
-    default: "h-10 px-4 py-2",
-    sm: "h-9 rounded-md px-3",
-  }
-
-  return (
-    <button
-      className={`inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 ${variants[variant]} ${sizes[size]} ${className}`}
-      {...props}
-    >
-      {children}
-    </button>
-  )
-}
-
-// Custom Tooltip Component
-const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: any[]; label?: string }) => {
-  if (active && payload && payload.length) {
-    return (
-      <div className="bg-white p-3 border rounded-lg shadow-lg">
-        <p className="font-medium">{label}</p>
-        {payload.map((entry: any, index: number) => (
-          <p key={index} className="text-sm" style={{ color: entry.color }}>
-            {entry.name}: {entry.value}
-          </p>
-        ))}
-      </div>
-    )
-  }
-  return null
+interface NetworkData {
+  name: string;
+  totalCases: number;
+  waitingApproval: number;
+  sentToNbtc: number;
+  dataReceived: number;
+  avgResponseTime: number;
 }
 
 export default function Dashboard() {
-  // Mock data - structured for easy MongoDB integration
-  const [summary, setSummary] = useState({
-    totalCases: 12345,
-    totalLoss: 35000.4,
-    monthlyLoss: 350.4,
-    dailyLoss: 35.4,
-    docsApproved: 154,
-    docsPending: 154,
-    growthRate: 2.1,
-    lastUpdated: new Date().toISOString(),
-  })
+  const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
+  const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([
+    new Date(2025, 5, 20), // June 20, 2025
+    new Date(2025, 5, 30)  // June 30, 2025
+  ]);
+
+  const handleDateRangeChange = (value: [string | null, string | null]) => {
+    const convertedRange: [Date | null, Date | null] = [
+      value[0] ? new Date(value[0]) : null,
+      value[1] ? new Date(value[1]) : null
+    ];
+    setDateRange(convertedRange);
+  };
+  const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  // Mock data with more realistic cases
+  const cases: CaseData[] = [
+    { 
+      senderName: "0812345678", 
+      caseId: "CASE112", 
+      network: "AIS", 
+      status: "waiting_approval", 
+      reportDate: "2025-06-24", 
+      amount: 5000,
+      assignedTo: "นาย ก",
+      isRecurring: true
+    },
+    { 
+      senderName: "0891234567", 
+      network: "DTAC", 
+      status: "sent_to_nbtc", 
+      reportDate: "2025-06-24", 
+      amount: 3000,
+      assignedTo: "นาง ข",
+      approvedBy: "ผบ.สมชาย"
+    },
+    { 
+      senderName: "0801234567", 
+      caseId: "CASE115", 
+      network: "TRUE", 
+      status: "data_received", 
+      reportDate: "2025-06-23", 
+      amount: 8000,
+      assignedTo: "นาย ค",
+      approvedBy: "ผบ.สมชาย"
+    },
+    { 
+      senderName: "0812345678", 
+      caseId: "CASE112", 
+      network: "AIS", 
+      status: "sent_to_nbtc", 
+      reportDate: "2025-06-22", 
+      amount: 12000,
+      assignedTo: "นาย ก",
+      approvedBy: "ผบ.สมชาย",
+      isRecurring: true
+    },
+    { 
+      senderName: "0876543210", 
+      network: "TRUE", 
+      status: "waiting_approval", 
+      reportDate: "2025-06-25", 
+      amount: 15000,
+      assignedTo: "นาง ง"
+    },
+    { 
+      senderName: "0898765432", 
+      caseId: "CASE118", 
+      network: "DTAC", 
+      status: "data_received", 
+      reportDate: "2025-06-21", 
+      amount: 7500,
+      assignedTo: "นาย จ",
+      approvedBy: "ผบ.วิชาญ"
+    }
+  ];
+
+  const networks: NetworkData[] = [
+    { name: "AIS", totalCases: 150, waitingApproval: 45, sentToNbtc: 23, dataReceived: 70, avgResponseTime: 3.2 },
+    { name: "DTAC", totalCases: 120, waitingApproval: 35, sentToNbtc: 18, dataReceived: 59, avgResponseTime: 4.1 },
+    { name: "TRUE", totalCases: 130, waitingApproval: 40, sentToNbtc: 20, dataReceived: 60, avgResponseTime: 2.8 },
+  ];
+
+  // Filter cases based on date range and status
+  const filteredCases = cases.filter(case_ => {
+    const caseDate = new Date(case_.reportDate);
+    const [fromDate, toDate] = dateRange;
+    
+    const dateMatch = fromDate && toDate ? 
+      caseDate >= fromDate && caseDate <= toDate : true;
+    const networkMatch = selectedNetwork ? case_.network === selectedNetwork : true;
+    const statusMatch = statusFilter === "all" ? true : case_.status === statusFilter;
+    
+    return dateMatch && networkMatch && statusMatch;
+  });
+
+  // Calculate totals from filtered data
+  const totalCases = filteredCases.length;
+  const totalWaiting = filteredCases.filter(c => c.status === 'waiting_approval').length;
+  const totalSent = filteredCases.filter(c => c.status === 'sent_to_nbtc').length;
+  const totalReceived = filteredCases.filter(c => c.status === 'data_received').length;
+  const highValueCases = filteredCases.filter(c => c.amount >= 10000).length;
+
+  const dailyLoss = filteredCases.reduce((sum, c) => sum + c.amount, 0);
+
+  // Export function
+  const exportReport = () => {
+    const [fromDate, toDate] = dateRange;
+    const fromStr = fromDate?.toISOString().split('T')[0] || 'start';
+    const toStr = toDate?.toISOString().split('T')[0] || 'end';
+    
+    const csvContent = [
+      ["Sender Name", "Case ID", "Network", "Status", "Amount", "Report Date", "Assigned To", "Approved By"].join(","),
+      ...filteredCases.map(case_ => [
+        case_.senderName,
+        case_.caseId || "ไม่มี Case ID",
+        case_.network,
+        getStatusText(case_.status),
+        case_.amount,
+        case_.reportDate,
+        case_.assignedTo || "-",
+        case_.approvedBy || "-"
+      ].join(","))
+    ].join("\n");
+
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `report_${fromStr}_to_${toStr}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const getStatusText = (status: string) => {
+    switch(status) {
+      case 'waiting_approval': return 'รออนุมัติ';
+      case 'sent_to_nbtc': return 'ส่งไป กสทช. แล้ว';
+      case 'data_received': return 'ได้รับข้อมูลจาก กสทช.';
+      default: return status;
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch(status) {
+      case 'waiting_approval': return 'bg-yellow-100 text-yellow-800';
+      case 'sent_to_nbtc': return 'bg-blue-100 text-blue-800';
+      case 'data_received': return 'bg-purple-100 text-purple-800';
+      default: return 'bg-gray-100 text-gray-800';
+    }
+  };
 
   // Chart data
-  const revenueData = [
-    { month: "Jan", cases: 186, lastWeek: 120 },
-    { month: "Feb", cases: 305, lastWeek: 200 },
-    { month: "Mar", cases: 237, lastWeek: 180 },
-    { month: "Apr", cases: 173, lastWeek: 150 },
-    { month: "May", cases: 209, lastWeek: 190 },
-    { month: "Jun", cases: 314, lastWeek: 250 },
-    { month: "Jul", cases: 290, lastWeek: 220 },
-    { month: "Aug", cases: 425, lastWeek: 300 },
-    { month: "Sep", cases: 380, lastWeek: 280 },
-    { month: "Oct", cases: 456, lastWeek: 350 },
-    { month: "Nov", cases: 398, lastWeek: 320 },
-    { month: "Dec", cases: 520, lastWeek: 400 },
-  ]
+  const filteredNetworks = selectedNetwork ? networks.filter(n => n.name === selectedNetwork) : networks;
+  
+  const getNetworkColors = (networks: NetworkData[]) => {
+    return networks.map(n => {
+      if (n.name === 'AIS') return "#4B5EFC";
+      if (n.name === 'DTAC') return "#10B981";
+      if (n.name === 'TRUE') return "#F59E0B";
+      return "#EF4444";
+    });
+  };
+  
+  const networkDistribution = {
+    labels: filteredNetworks.map(n => n.name),
+    datasets: [{
+      data: filteredNetworks.map(n => n.totalCases),
+      backgroundColor: getNetworkColors(filteredNetworks),
+      borderColor: "#FFFFFF",
+      borderWidth: 2,
+    }],
+  };
 
-  const statusData = [
-    { name: "ระงับแล้ว", value: 40, color: "#6366f1" },
-    { name: "อยู่ระหว่างดำเนินการ", value: 32, color: "#a5b4fc" },
-    { name: "รอดำเนินการ", value: 28, color: "#fbbf24" },
-  ]
+  const dailyNewCases = {
+    labels: ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"],
+    datasets: [{
+      label: "เคสใหม่",
+      data: [45, 52, 48, 61, 55, 67, 58],
+      backgroundColor: "#4B5EFC",
+      borderRadius: 6,
+    }],
+  };
 
-  const carrierData = [
-    { name: "TRUE", percentage: 85, cases: 4200, color: "#f97316" },
-    { name: "AIS", percentage: 85, cases: 3800, color: "#8b5cf6" },
-    { name: "DTAC", percentage: 92, cases: 4345, color: "#06b6d4" },
-  ]
+  const lossHistory = {
+    labels: ["มิ.ย. 18", "มิ.ย. 19", "มิ.ย. 20", "มิ.ย. 21", "มิ.ย. 22", "มิ.ย. 23", "มิ.ย. 24"],
+    datasets: [{
+      label: "ความเสียหาย (บาท)",
+      data: [280000, 320000, 310000, 340000, 330000, 360000, 350000],
+      borderColor: "#EF4444",
+      backgroundColor: "rgba(239, 68, 68, 0.1)",
+      tension: 0.4,
+      fill: true,
+    }],
+  };
 
-  const statCards = [
-    {
-      title: "มูลค่าความเสียหายรวม",
-      value: `$${summary.totalLoss.toLocaleString()}`,
-      icon: DollarSign,
-      trend: "up",
-      trendValue: "12.5%",
-      color: "text-green-600",
-      bgColor: "bg-green-50",
-      iconColor: "text-green-600",
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        position: "bottom" as const,
+        labels: { color: "#374151", font: { size: 12 } }
+      },
+      tooltip: {
+        backgroundColor: "#1F2937",
+        titleColor: "#F9FAFB",
+        bodyColor: "#F9FAFB",
+      }
     },
-    {
-      title: "ความเสียหายเดือนนี้",
-      value: `$${summary.monthlyLoss.toLocaleString()}`,
-      icon: TrendingUp,
-      trend: "down",
-      trendValue: "2.1%",
-      color: "text-blue-600",
-      bgColor: "bg-blue-50",
-      iconColor: "text-blue-600",
+  };
+
+  const pieOptions = {
+    ...chartOptions,
+    onClick: (event: any, elements: any) => {
+      if (elements.length > 0) {
+        const index = elements[0].index;
+        const networkName = filteredNetworks[index]?.name;
+        setSelectedNetwork(selectedNetwork === networkName ? null : networkName);
+      }
     },
-    {
-      title: "ความเสียหายวันนี้",
-      value: `$${summary.dailyLoss.toLocaleString()}`,
-      icon: AlertTriangle,
-      trend: "up",
-      trendValue: "5.2%",
-      color: "text-orange-600",
-      bgColor: "bg-orange-50",
-      iconColor: "text-orange-600",
-    },
-    {
-      title: "เอกสารที่รับรองแล้ว",
-      value: summary.docsApproved.toLocaleString(),
-      icon: FileCheck,
-      trend: "up",
-      trendValue: "8.1%",
-      color: "text-emerald-600",
-      bgColor: "bg-emerald-50",
-      iconColor: "text-emerald-600",
-    },
-    {
-      title: "เอกสารรอรับรอง",
-      value: summary.docsPending.toLocaleString(),
-      icon: FileClock,
-      trend: "down",
-      trendValue: "3.2%",
-      color: "text-red-600",
-      bgColor: "bg-red-50",
-      iconColor: "text-red-600",
-    },
-    {
-      title: "จำนวนเคสสะสม",
-      value: summary.totalCases.toLocaleString(),
-      icon: Users,
-      trend: "up",
-      trendValue: "15.3%",
-      color: "text-purple-600",
-      bgColor: "bg-purple-50",
-      iconColor: "text-purple-600",
-    },
-  ]
+  };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-4 md:p-6 lg:p-8">
-      {/* Header */}
-      <div className="mb-8">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+    <MantineProvider>
+      <div className="min-h-screen bg-gray-50 p-6">
+        {/* Header */}
+        <header className="flex justify-between items-center mb-8">
           <div>
-            <h1 className="text-3xl md:text-4xl font-bold text-slate-900 mb-2">Dashboard Overview</h1>
-            <p className="text-slate-600 flex items-center gap-2">
-              <Calendar className="h-4 w-4" />
-              Last updated: {new Date().toLocaleDateString("th-TH")}
-            </p>
+            <h1 className="text-4xl font-bold text-gray-900">DASHBOARD</h1>
+            {selectedNetwork && (
+              <p className="text-lg text-gray-600 mt-2">
+                แสดงข้อมูล: {selectedNetwork} 
+                <button 
+                  onClick={() => setSelectedNetwork(null)}
+                  className="ml-2 text-blue-600 hover:text-blue-800 underline"
+                >
+                  (ดูทั้งหมด)
+                </button>
+              </p>
+            )}
           </div>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm">
-              <BarChart3 className="h-4 w-4 mr-2" />
-              Export
-            </Button>
-            <Button size="sm">Refresh Data</Button>
+          <div className="flex gap-4">
+            <button 
+              onClick={exportReport}
+              className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-lg flex items-center gap-2"
+            >
+              📊 Export Report
+            </button>
+            <button className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-lg">
+              ดูรายละเอียดเคส
+            </button>
+            <button className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-lg">
+              อนุมัติคำขอ ({totalWaiting})
+            </button>
+          </div>
+        </header>
+
+        {/* Filters */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">ตัวกรองข้อมูล</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+            <div className="flex flex-col">
+              <label className="block text-sm font-medium text-gray-700 mb-2">ช่วงเวลา</label>
+              <DatePickerInput
+                type="range"
+                value={[
+                  dateRange[0] ? dateRange[0].toISOString().split('T')[0] : null,
+                  dateRange[1] ? dateRange[1].toISOString().split('T')[0] : null
+                ]}
+                onChange={handleDateRangeChange}
+                placeholder="เลือกช่วงวันที่"
+                valueFormat="DD/MM/YYYY"
+                size="md"
+                radius="md"
+                styles={{
+                  input: {
+                    border: '1px solid #d1d5db',
+                    height: '44px',
+                    '&:focus': {
+                      borderColor: '#3b82f6',
+                      boxShadow: '0 0 0 1px #3b82f6'
+                    }
+                  }
+                }}
+              />
+            </div>
+            <div className="flex flex-col">
+              <label className="block text-sm font-medium text-gray-700 mb-2">สถานะ</label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-3 py-2 h-[44px] border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white text-gray-900"
+              >
+                <option value="all">ทั้งหมด</option>
+                <option value="waiting_approval">รออนุมัติ</option>
+                <option value="sent_to_nbtc">ส่งไป กสทช. แล้ว</option>
+                <option value="data_received">ได้รับข้อมูลแล้ว</option>
+              </select>
+            </div>
+            <div className="flex flex-col">
+              <label className="block text-sm font-medium text-gray-700 mb-2">เครือข่าย</label>
+              <select
+                value={selectedNetwork || "all"}
+                onChange={(e) => setSelectedNetwork(e.target.value === "all" ? null : e.target.value)}
+                className="w-full px-3 py-2 h-[44px] border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white text-gray-900"
+              >
+                <option value="all">ทั้งหมด</option>
+                <option value="AIS">AIS</option>
+                <option value="DTAC">DTAC</option>
+                <option value="TRUE">TRUE</option>
+              </select>
+            </div>
+            <div className="flex flex-col">
+              <label className="block text-sm font-medium text-gray-700 mb-2">&nbsp;</label>
+              <button
+                onClick={() => {
+                  setDateRange([new Date(2025, 5, 20), new Date(2025, 5, 30)]);
+                  setStatusFilter("all");
+                  setSelectedNetwork(null);
+                }}
+                className="w-full px-4 py-2 h-[44px] bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors font-medium"
+              >
+                รีเซ็ตตัวกรอง
+              </button>
+            </div>
+          </div>
+          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <div className="flex flex-wrap gap-4 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-gray-600">พบข้อมูล:</span>
+                <span className="font-semibold text-blue-600">{filteredCases.length} รายการ</span>
+              </div>
+              {dateRange[0] && dateRange[1] && (
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600">ช่วงเวลา:</span>
+                  <span className="font-medium text-gray-800">
+                    {dateRange[0] instanceof Date ? dateRange[0].toLocaleDateString('th-TH') : dateRange[0]} - {dateRange[1] instanceof Date ? dateRange[1].toLocaleDateString('th-TH') : dateRange[1]}
+                  </span>
+                </div>
+              )}
+              {selectedNetwork && (
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600">เครือข่าย:</span>
+                  <span className="font-medium text-gray-800">{selectedNetwork}</span>
+                </div>
+              )}
+              {statusFilter !== "all" && (
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600">สถานะ:</span>
+                  <span className="font-medium text-gray-800">{getStatusText(statusFilter)}</span>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Alert Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-lg">
+            <div className="flex items-center">
+              <div className="text-red-400 text-2xl mr-3">⚠️</div>
+              <div>
+                <p className="text-sm text-red-800 font-medium">รออนุมัติเกิน 3 วัน</p>
+                <p className="text-2xl font-bold text-red-900">
+                  {filteredCases.filter(c => c.status === 'waiting_approval' && 
+                    new Date().getTime() - new Date(c.reportDate).getTime() > 3 * 24 * 60 * 60 * 1000).length}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg">
+            <div className="flex items-center">
+              <div className="text-yellow-400 text-2xl mr-3">📤</div>
+              <div>
+                <p className="text-sm text-yellow-800 font-medium">ส่ง กสทช. เกิน 7 วัน</p>
+                <p className="text-2xl font-bold text-yellow-900">
+                  {filteredCases.filter(c => c.status === 'sent_to_nbtc' && 
+                    new Date().getTime() - new Date(c.reportDate).getTime() > 7 * 24 * 60 * 60 * 1000).length}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-lg">
+            <div className="flex items-center">
+              <div className="text-blue-400 text-2xl mr-3">💰</div>
+              <div>
+                <p className="text-sm text-blue-800 font-medium">ความเสียหายรวม</p>
+                <p className="text-2xl font-bold text-blue-900">{dailyLoss.toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-green-50 border-l-4 border-green-400 p-4 rounded-lg">
+            <div className="flex items-center">
+              <div className="text-green-400 text-2xl mr-3">✅</div>
+              <div>
+                <p className="text-sm text-green-800 font-medium">ได้รับข้อมูลแล้ว</p>
+                <p className="text-2xl font-bold text-green-900">{totalReceived}</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Status Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            <div className="text-blue-500 text-3xl mb-2">📊</div>
+            <div className="text-sm font-medium text-gray-600 mb-1">เคสทั้งหมด</div>
+            <div className="text-2xl font-bold text-gray-900">{totalCases}</div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            <div className="text-yellow-500 text-3xl mb-2">⏳</div>
+            <div className="text-sm font-medium text-gray-600 mb-1">รออนุมัติ</div>
+            <div className="text-2xl font-bold text-gray-900">{totalWaiting}</div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            <div className="text-blue-500 text-3xl mb-2">📤</div>
+            <div className="text-sm font-medium text-gray-600 mb-1">ส่งไป กสทช.</div>
+            <div className="text-2xl font-bold text-gray-900">{totalSent}</div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            <div className="text-red-500 text-3xl mb-2">🚨</div>
+            <div className="text-sm font-medium text-gray-600 mb-1">เคสมูลค่าสูง</div>
+            <div className="text-2xl font-bold text-gray-900">{highValueCases}</div>
+            <div className="text-xs text-gray-500">≥ 10,000 บาท</div>
+          </div>
+        </div>
+
+        {/* Charts */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">
+              การแจกแจงตามเครือข่าย {selectedNetwork && `(${selectedNetwork})`}
+            </h2>
+            <div className="h-64">
+              <Pie data={networkDistribution} options={pieOptions} />
+            </div>
+            <p className="text-xs text-gray-500 mt-2 text-center">คลิกเพื่อกรองข้อมูล</p>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">เคสใหม่ต่อวัน</h2>
+            <div className="h-64">
+              <Bar data={dailyNewCases} options={chartOptions} />
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">แนวโน้มความเสียหาย</h2>
+            <div className="h-64">
+              <Line data={lossHistory} options={chartOptions} />
+            </div>
           </div>
         </div>
       </div>
-
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4 mb-8">
-        {statCards.map((stat, index) => (
-          <Card key={index} className="hover:shadow-lg transition-all duration-300 hover:-translate-y-1">
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div className={`p-3 rounded-full ${stat.bgColor}`}>
-                  <stat.icon className={`h-6 w-6 ${stat.iconColor}`} />
-                </div>
-                <Badge variant={stat.trend === "up" ? "default" : "secondary"} className="text-xs">
-                  {stat.trend === "up" ? (
-                    <TrendingUp className="h-3 w-3 mr-1" />
-                  ) : (
-                    <TrendingDown className="h-3 w-3 mr-1" />
-                  )}
-                  {stat.trendValue}
-                </Badge>
-              </div>
-              <div className="mt-4">
-                <p className="text-sm font-medium text-slate-600 mb-1">{stat.title}</p>
-                <p className="text-2xl font-bold text-slate-900">{stat.value}</p>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Charts Section */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-        {/* Revenue Chart */}
-        <Card className="hover:shadow-lg transition-shadow duration-300">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <div>
-              <CardTitle className="text-xl font-semibold">จำนวนเคส</CardTitle>
-              <CardDescription className="flex items-center gap-2 mt-2">
-                <Badge variant="secondary" className="text-green-600 bg-green-50">
-                  <TrendingUp className="h-3 w-3 mr-1" />↑ 2.1% vs last week
-                </Badge>
-              </CardDescription>
-            </div>
-            <Button variant="outline" size="sm">
-              View Report
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={revenueData}>
-                  <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <Tooltip content={<CustomTooltip />} />
-                  <Bar dataKey="cases" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="lastWeek" fill="#94a3b8" radius={[4, 4, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Status Pie Chart */}
-        <Card className="hover:shadow-lg transition-shadow duration-300">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <div>
-              <CardTitle className="text-xl font-semibold">สถานะเคส</CardTitle>
-              <CardDescription>การกระจายตัวของสถานะเคส</CardDescription>
-            </div>
-            <Button variant="outline" size="sm">
-              View Details
-            </Button>
-          </CardHeader>
-          <CardContent>
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <RechartsPieChart>
-                  <Pie
-                    data={statusData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={60}
-                    outerRadius={100}
-                    paddingAngle={5}
-                    dataKey="value"
-                  >
-                    {statusData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.color} />
-                    ))}
-                  </Pie>
-                  <Tooltip
-                    content={({ active, payload }: { active?: boolean; payload?: any[] }) => {
-                      if (active && payload && payload.length) {
-                        return (
-                          <div className="bg-white p-3 border rounded-lg shadow-lg">
-                            <p className="font-medium">{payload[0]?.payload?.name}</p>
-                            <p className="text-sm text-slate-600">{payload[0]?.value}%</p>
-                          </div>
-                        )
-                      }
-                      return null
-                    }}
-                  />
-                  <Legend
-                    verticalAlign="bottom"
-                    height={36}
-                    formatter={(value, entry) => (
-                      <span className="text-sm">
-                        {value} ({entry?.payload?.value || 0}%)
-                      </span>
-                    )}
-                  />
-                </RechartsPieChart>
-              </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Carrier Analysis */}
-      <Card className="hover:shadow-lg transition-shadow duration-300">
-        <CardHeader>
-          <CardTitle className="text-xl font-semibold">เปอร์เซ็นต์ค่าย</CardTitle>
-          <CardDescription>เปอร์เซ็นของเคส แยกตามค่าย</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {carrierData.map((carrier, index) => (
-              <div key={index} className="text-center group">
-                <div
-                  className="relative mx-auto mb-4 rounded-full flex items-center justify-center text-white font-bold transition-transform duration-300 group-hover:scale-110 shadow-lg"
-                  style={{
-                    backgroundColor: carrier.color,
-                    width: `${80 + carrier.percentage * 0.8}px`,
-                    height: `${80 + carrier.percentage * 0.8}px`,
-                  }}
-                >
-                  <div className="text-center">
-                    <div className="text-xl font-bold">{carrier.percentage}%</div>
-                    <div className="text-xs opacity-90">{carrier.name}</div>
-                  </div>
-                </div>
-                <div className="text-sm text-slate-600">{carrier.cases.toLocaleString()} เคส</div>
-              </div>
-            ))}
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  )
+    </MantineProvider>
+  );
 }
