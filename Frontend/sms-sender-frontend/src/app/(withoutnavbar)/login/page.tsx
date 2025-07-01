@@ -13,10 +13,10 @@ export default function LoginPage() {
 
   const handleLogin = async () => {
     const res = await signIn("credentials", {
-      redirect: false,
+      redirect: true,
       email,
       password,
-      callbackUrl: "/",
+      callbackUrl: "/mainmenu",
     });
 
     if (res?.error) {
@@ -41,6 +41,7 @@ export default function LoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="border p-2 w-full rounded"
+            spellCheck={false}
           />
         </div>
         <div className="mb-6">
@@ -58,7 +59,7 @@ export default function LoginPage() {
         >
           Log in
         </button>
-        <p className="text-center text-sm">
+        <div className="text-center text-sm">
           By continuing, you agree to the{" "}
           <a href="#" className="underline cursor-pointer hover:text-blue-500">
             Terms of use
@@ -67,7 +68,7 @@ export default function LoginPage() {
           <a href="#" className="underline cursor-pointer hover:text-blue-500">
             Privacy Policy
           </a>.
-        </p>
+        </div>
       </div>
     </div>
   );

@@ -19,36 +19,12 @@ const menuItems = [
     textColor: "group-hover:text-blue-700"
   },
   { 
-    label: "ส่งข้อมูล", 
-    path: "/send",
-    icon: Send,
-    color: "from-green-500 to-green-600",
-    hoverColor: "hover:border-green-200",
-    textColor: "group-hover:text-green-700"
-  },
-  { 
     label: "หนังสือตรวจรออนุมัติ", 
     path: "/support-letter",
     icon: FileText,
     color: "from-purple-500 to-purple-600",
     hoverColor: "hover:border-purple-200",
     textColor: "group-hover:text-purple-700"
-  },
-  { 
-    label: "ส่งข้อมูลให้ผู้รับผิดชอบ", 
-    path: "/cases",
-    icon: Users,
-    color: "from-orange-500 to-orange-600",
-    hoverColor: "hover:border-orange-200",
-    textColor: "group-hover:text-orange-700"
-  },
-  { 
-    label: "ส่งรายงานที่ยังไม่ได้ส่ง", 
-    path: "/print-unread-report",
-    icon: Printer,
-    color: "from-red-500 to-red-600",
-    hoverColor: "hover:border-red-200",
-    textColor: "group-hover:text-red-700"
   },
   { 
     label: "ค้นหาข้อมูลทั้งหมด", 
