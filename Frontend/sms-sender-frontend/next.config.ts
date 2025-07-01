@@ -19,6 +19,23 @@ const nextConfig = {
   },
   reactStrictMode: false,
   devIndicators: false,
+  webpack: (config: { infrastructureLogging: { level: string }; stats: { warningsFilter: RegExp[] } }, { dev }: any) => {
+    if (dev) {
+      // Suppress webpack cache warnings in development
+      config.infrastructureLogging = {
+        level: 'error',
+      }
+      
+      // Suppress specific serialization warnings
+      config.stats = {
+        warningsFilter: [
+          /Serializing big strings/,
+          /PackFileCacheStrategy/
+        ]
+      }
+    }
+    return config
+  },
 }
 
 module.exports = nextConfig

@@ -1,6 +1,7 @@
 "use client";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { StatsSegments } from "@/libs/StatsSegments";
 
 export default function DailyPage() {
   const router = useRouter();
@@ -20,6 +21,10 @@ export default function DailyPage() {
       <h1 className="text-4xl font-extrabold mb-8 underline decoration-blue-500 self-start">
         ข้อมูลรายวัน
       </h1>
+
+      <div className="w-full max-w-4xl mb-8">
+        <StatsSegments />
+      </div>
 
       {/* Report Card */}
       <div className="w-full max-w-4xl bg-white rounded-2xl shadow-md border p-8 mb-16">
