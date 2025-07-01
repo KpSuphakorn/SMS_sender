@@ -13,6 +13,10 @@ import {
   LineElement,
   PointElement,
 } from "chart.js";
+import { DatePickerInput } from '@mantine/dates';
+import { MantineProvider } from '@mantine/core';
+import '@mantine/core/styles.css';
+import '@mantine/dates/styles.css';
 
 ChartJS.register(ArcElement, Tooltip, Legend, BarElement, CategoryScale, LinearScale, LineElement, PointElement);
 
@@ -37,10 +41,20 @@ interface NetworkData {
   avgResponseTime: number;
 }
 
-export default function FraudDashboard() {
+export default function Dashboard() {
   const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
-  const [dateFrom, setDateFrom] = useState("2025-06-20");
-  const [dateTo, setDateTo] = useState("2025-06-30");
+  const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([
+    new Date(2025, 5, 20), // June 20, 2025
+    new Date(2025, 5, 30)  // June 30, 2025
+  ]);
+
+  const handleDateRangeChange = (value: [string | null, string | null]) => {
+    const convertedRange: [Date | null, Date | null] = [
+      value[0] ? new Date(value[0]) : null,
+      value[1] ? new Date(value[1]) : null
+    ];
+    setDateRange(convertedRange);
+  };
   const [statusFilter, setStatusFilter] = useState<string>("all");
 
   // Mock data with more realistic cases
@@ -114,10 +128,10 @@ export default function FraudDashboard() {
   // Filter cases based on date range and status
   const filteredCases = cases.filter(case_ => {
     const caseDate = new Date(case_.reportDate);
-    const fromDate = new Date(dateFrom);
-    const toDate = new Date(dateTo);
+    const [fromDate, toDate] = dateRange;
     
-    const dateMatch = caseDate >= fromDate && caseDate <= toDate;
+    const dateMatch = fromDate && toDate ? 
+      caseDate >= fromDate && caseDate <= toDate : true;
     const networkMatch = selectedNetwork ? case_.network === selectedNetwork : true;
     const statusMatch = statusFilter === "all" ? true : case_.status === statusFilter;
     
@@ -131,11 +145,14 @@ export default function FraudDashboard() {
   const totalReceived = filteredCases.filter(c => c.status === 'data_received').length;
   const highValueCases = filteredCases.filter(c => c.amount >= 10000).length;
 
-
   const dailyLoss = filteredCases.reduce((sum, c) => sum + c.amount, 0);
 
   // Export function
   const exportReport = () => {
+    const [fromDate, toDate] = dateRange;
+    const fromStr = fromDate?.toISOString().split('T')[0] || 'start';
+    const toStr = toDate?.toISOString().split('T')[0] || 'end';
+    
     const csvContent = [
       ["Sender Name", "Case ID", "Network", "Status", "Amount", "Report Date", "Assigned To", "Approved By"].join(","),
       ...filteredCases.map(case_ => [
@@ -154,7 +171,7 @@ export default function FraudDashboard() {
     const link = document.createElement("a");
     const url = URL.createObjectURL(blob);
     link.setAttribute("href", url);
-    link.setAttribute("download", `fraud_report_${dateFrom}_to_${dateTo}.csv`);
+    link.setAttribute("download", `report_${fromStr}_to_${toStr}.csv`);
     link.style.visibility = 'hidden';
     document.body.appendChild(link);
     link.click();
@@ -251,198 +268,243 @@ export default function FraudDashboard() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6">
-      {/* Header */}
-      <header className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-4xl font-bold text-gray-900">FRAUD DASHBOARD</h1>
-          {selectedNetwork && (
-            <p className="text-lg text-gray-600 mt-2">
-              แสดงข้อมูล: {selectedNetwork} 
-              <button 
-                onClick={() => setSelectedNetwork(null)}
-                className="ml-2 text-blue-600 hover:text-blue-800 underline"
-              >
-                (ดูทั้งหมด)
-              </button>
-            </p>
-          )}
-        </div>
-        <div className="flex gap-4">
-          <button 
-            onClick={exportReport}
-            className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-lg flex items-center gap-2"
-          >
-            📊 Export Report
-          </button>
-          <button className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-lg">
-            ดูรายละเอียดเคส
-          </button>
-          <button className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-lg">
-            อนุมัติคำขอ ({totalWaiting})
-          </button>
-        </div>
-      </header>
-
-      {/* Filters */}
-      <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
-        <h2 className="text-lg font-semibold text-gray-800 mb-4">ตัวกรองข้อมูล</h2>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+    <MantineProvider>
+      <div className="min-h-screen bg-gray-50 p-6">
+        {/* Header */}
+        <header className="flex justify-between items-center mb-8">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">วันที่เริ่มต้น</label>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
-            />
+            <h1 className="text-4xl font-bold text-gray-900">DASHBOARD</h1>
+            {selectedNetwork && (
+              <p className="text-lg text-gray-600 mt-2">
+                แสดงข้อมูล: {selectedNetwork} 
+                <button 
+                  onClick={() => setSelectedNetwork(null)}
+                  className="ml-2 text-blue-600 hover:text-blue-800 underline"
+                >
+                  (ดูทั้งหมด)
+                </button>
+              </p>
+            )}
           </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">วันที่สิ้นสุด</label>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">สถานะ</label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
+          <div className="flex gap-4">
+            <button 
+              onClick={exportReport}
+              className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors shadow-lg flex items-center gap-2"
             >
-              <option value="all">ทั้งหมด</option>
-              <option value="waiting_approval">รออนุมัติ</option>
-              <option value="sent_to_nbtc">ส่งไป กสทช. แล้ว</option>
-              <option value="data_received">ได้รับข้อมูลแล้ว</option>
-            </select>
-          </div>
-          <div className="flex items-end">
-            <button
-              onClick={() => {
-                setDateFrom("2025-06-20");
-                setDateTo("2025-06-30");
-                setStatusFilter("all");
-                setSelectedNetwork(null);
-              }}
-              className="w-full px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
-            >
-              รีเซ็ตตัวกรอง
+              📊 Export Report
+            </button>
+            <button className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-lg">
+              ดูรายละเอียดเคส
+            </button>
+            <button className="px-6 py-3 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors shadow-lg">
+              อนุมัติคำขอ ({totalWaiting})
             </button>
           </div>
-        </div>
-        <div className="mt-4 text-sm text-gray-600">
-          พบข้อมูล: {filteredCases.length} รายการ
-        </div>
-      </div>
+        </header>
 
-      {/* Alert Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
-        <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-lg">
-          <div className="flex items-center">
-            <div className="text-red-400 text-2xl mr-3">⚠️</div>
-            <div>
-              <p className="text-sm text-red-800 font-medium">รออนุมัติเกิน 3 วัน</p>
-              <p className="text-2xl font-bold text-red-900">
-                {filteredCases.filter(c => c.status === 'waiting_approval' && 
-                  new Date().getTime() - new Date(c.reportDate).getTime() > 3 * 24 * 60 * 60 * 1000).length}
-              </p>
+        {/* Filters */}
+        <div className="bg-white rounded-xl shadow-lg p-6 mb-8">
+          <h2 className="text-lg font-semibold text-gray-800 mb-4">ตัวกรองข้อมูล</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+            <div className="flex flex-col">
+              <label className="block text-sm font-medium text-gray-700 mb-2">ช่วงเวลา</label>
+              <DatePickerInput
+                type="range"
+                value={[
+                  dateRange[0] ? dateRange[0].toISOString().split('T')[0] : null,
+                  dateRange[1] ? dateRange[1].toISOString().split('T')[0] : null
+                ]}
+                onChange={handleDateRangeChange}
+                placeholder="เลือกช่วงวันที่"
+                valueFormat="DD/MM/YYYY"
+                size="md"
+                radius="md"
+                styles={{
+                  input: {
+                    border: '1px solid #d1d5db',
+                    height: '44px',
+                    '&:focus': {
+                      borderColor: '#3b82f6',
+                      boxShadow: '0 0 0 1px #3b82f6'
+                    }
+                  }
+                }}
+              />
+            </div>
+            <div className="flex flex-col">
+              <label className="block text-sm font-medium text-gray-700 mb-2">สถานะ</label>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-3 py-2 h-[44px] border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white text-gray-900"
+              >
+                <option value="all">ทั้งหมด</option>
+                <option value="waiting_approval">รออนุมัติ</option>
+                <option value="sent_to_nbtc">ส่งไป กสทช. แล้ว</option>
+                <option value="data_received">ได้รับข้อมูลแล้ว</option>
+              </select>
+            </div>
+            <div className="flex flex-col">
+              <label className="block text-sm font-medium text-gray-700 mb-2">เครือข่าย</label>
+              <select
+                value={selectedNetwork || "all"}
+                onChange={(e) => setSelectedNetwork(e.target.value === "all" ? null : e.target.value)}
+                className="w-full px-3 py-2 h-[44px] border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 bg-white text-gray-900"
+              >
+                <option value="all">ทั้งหมด</option>
+                <option value="AIS">AIS</option>
+                <option value="DTAC">DTAC</option>
+                <option value="TRUE">TRUE</option>
+              </select>
+            </div>
+            <div className="flex flex-col">
+              <label className="block text-sm font-medium text-gray-700 mb-2">&nbsp;</label>
+              <button
+                onClick={() => {
+                  setDateRange([new Date(2025, 5, 20), new Date(2025, 5, 30)]);
+                  setStatusFilter("all");
+                  setSelectedNetwork(null);
+                }}
+                className="w-full px-4 py-2 h-[44px] bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors font-medium"
+              >
+                รีเซ็ตตัวกรอง
+              </button>
+            </div>
+          </div>
+          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+            <div className="flex flex-wrap gap-4 text-sm">
+              <div className="flex items-center gap-2">
+                <span className="text-gray-600">พบข้อมูล:</span>
+                <span className="font-semibold text-blue-600">{filteredCases.length} รายการ</span>
+              </div>
+              {dateRange[0] && dateRange[1] && (
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600">ช่วงเวลา:</span>
+                  <span className="font-medium text-gray-800">
+                    {dateRange[0] instanceof Date ? dateRange[0].toLocaleDateString('th-TH') : dateRange[0]} - {dateRange[1] instanceof Date ? dateRange[1].toLocaleDateString('th-TH') : dateRange[1]}
+                  </span>
+                </div>
+              )}
+              {selectedNetwork && (
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600">เครือข่าย:</span>
+                  <span className="font-medium text-gray-800">{selectedNetwork}</span>
+                </div>
+              )}
+              {statusFilter !== "all" && (
+                <div className="flex items-center gap-2">
+                  <span className="text-gray-600">สถานะ:</span>
+                  <span className="font-medium text-gray-800">{getStatusText(statusFilter)}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg">
-          <div className="flex items-center">
-            <div className="text-yellow-400 text-2xl mr-3">📤</div>
-            <div>
-              <p className="text-sm text-yellow-800 font-medium">ส่ง กสทช. เกิน 7 วัน</p>
-              <p className="text-2xl font-bold text-yellow-900">
-                {filteredCases.filter(c => c.status === 'sent_to_nbtc' && 
-                  new Date().getTime() - new Date(c.reportDate).getTime() > 7 * 24 * 60 * 60 * 1000).length}
-              </p>
+        {/* Alert Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+          <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-lg">
+            <div className="flex items-center">
+              <div className="text-red-400 text-2xl mr-3">⚠️</div>
+              <div>
+                <p className="text-sm text-red-800 font-medium">รออนุมัติเกิน 3 วัน</p>
+                <p className="text-2xl font-bold text-red-900">
+                  {filteredCases.filter(c => c.status === 'waiting_approval' && 
+                    new Date().getTime() - new Date(c.reportDate).getTime() > 3 * 24 * 60 * 60 * 1000).length}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-yellow-50 border-l-4 border-yellow-400 p-4 rounded-lg">
+            <div className="flex items-center">
+              <div className="text-yellow-400 text-2xl mr-3">📤</div>
+              <div>
+                <p className="text-sm text-yellow-800 font-medium">ส่ง กสทช. เกิน 7 วัน</p>
+                <p className="text-2xl font-bold text-yellow-900">
+                  {filteredCases.filter(c => c.status === 'sent_to_nbtc' && 
+                    new Date().getTime() - new Date(c.reportDate).getTime() > 7 * 24 * 60 * 60 * 1000).length}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-lg">
+            <div className="flex items-center">
+              <div className="text-blue-400 text-2xl mr-3">💰</div>
+              <div>
+                <p className="text-sm text-blue-800 font-medium">ความเสียหายรวม</p>
+                <p className="text-2xl font-bold text-blue-900">{dailyLoss.toLocaleString()}</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-green-50 border-l-4 border-green-400 p-4 rounded-lg">
+            <div className="flex items-center">
+              <div className="text-green-400 text-2xl mr-3">✅</div>
+              <div>
+                <p className="text-sm text-green-800 font-medium">ได้รับข้อมูลแล้ว</p>
+                <p className="text-2xl font-bold text-green-900">{totalReceived}</p>
+              </div>
             </div>
           </div>
         </div>
 
-        <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-lg">
-          <div className="flex items-center">
-            <div className="text-blue-400 text-2xl mr-3">💰</div>
-            <div>
-              <p className="text-sm text-blue-800 font-medium">ความเสียหายรวม</p>
-              <p className="text-2xl font-bold text-blue-900">{dailyLoss.toLocaleString()}</p>
+        {/* Status Cards */}
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            <div className="text-blue-500 text-3xl mb-2">📊</div>
+            <div className="text-sm font-medium text-gray-600 mb-1">เคสทั้งหมด</div>
+            <div className="text-2xl font-bold text-gray-900">{totalCases}</div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            <div className="text-yellow-500 text-3xl mb-2">⏳</div>
+            <div className="text-sm font-medium text-gray-600 mb-1">รออนุมัติ</div>
+            <div className="text-2xl font-bold text-gray-900">{totalWaiting}</div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            <div className="text-blue-500 text-3xl mb-2">📤</div>
+            <div className="text-sm font-medium text-gray-600 mb-1">ส่งไป กสทช.</div>
+            <div className="text-2xl font-bold text-gray-900">{totalSent}</div>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-md p-6 text-center">
+            <div className="text-red-500 text-3xl mb-2">🚨</div>
+            <div className="text-sm font-medium text-gray-600 mb-1">เคสมูลค่าสูง</div>
+            <div className="text-2xl font-bold text-gray-900">{highValueCases}</div>
+            <div className="text-xs text-gray-500">≥ 10,000 บาท</div>
+          </div>
+        </div>
+
+        {/* Charts */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">
+              การแจกแจงตามเครือข่าย {selectedNetwork && `(${selectedNetwork})`}
+            </h2>
+            <div className="h-64">
+              <Pie data={networkDistribution} options={pieOptions} />
+            </div>
+            <p className="text-xs text-gray-500 mt-2 text-center">คลิกเพื่อกรองข้อมูล</p>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">เคสใหม่ต่อวัน</h2>
+            <div className="h-64">
+              <Bar data={dailyNewCases} options={chartOptions} />
+            </div>
+          </div>
+
+          <div className="bg-white p-6 rounded-xl shadow-lg">
+            <h2 className="text-lg font-semibold text-gray-800 mb-4">แนวโน้มความเสียหาย</h2>
+            <div className="h-64">
+              <Line data={lossHistory} options={chartOptions} />
             </div>
           </div>
         </div>
-
-        <div className="bg-green-50 border-l-4 border-green-400 p-4 rounded-lg">
-          <div className="flex items-center">
-            <div className="text-green-400 text-2xl mr-3">✅</div>
-            <div>
-              <p className="text-sm text-green-800 font-medium">ได้รับข้อมูลแล้ว</p>
-              <p className="text-2xl font-bold text-green-900">{totalReceived}</p>
-            </div>
-          </div>
-        </div>
       </div>
-
-      {/* Status Cards */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-        <div className="bg-white rounded-xl shadow-md p-6 text-center">
-          <div className="text-blue-500 text-3xl mb-2">📊</div>
-          <div className="text-sm font-medium text-gray-600 mb-1">เคสทั้งหมด</div>
-          <div className="text-2xl font-bold text-gray-900">{totalCases}</div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-md p-6 text-center">
-          <div className="text-yellow-500 text-3xl mb-2">⏳</div>
-          <div className="text-sm font-medium text-gray-600 mb-1">รออนุมัติ</div>
-          <div className="text-2xl font-bold text-gray-900">{totalWaiting}</div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-md p-6 text-center">
-          <div className="text-blue-500 text-3xl mb-2">📤</div>
-          <div className="text-sm font-medium text-gray-600 mb-1">ส่งไป กสทช.</div>
-          <div className="text-2xl font-bold text-gray-900">{totalSent}</div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-md p-6 text-center">
-          <div className="text-red-500 text-3xl mb-2">🚨</div>
-          <div className="text-sm font-medium text-gray-600 mb-1">เคสมูลค่าสูง</div>
-          <div className="text-2xl font-bold text-gray-900">{highValueCases}</div>
-          <div className="text-xs text-gray-500">≥ 10,000 บาท</div>
-        </div>
-      </div>
-
-      {/* Charts */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-        <div className="bg-white p-6 rounded-xl shadow-lg">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">
-            การแจกแจงตามเครือข่าย {selectedNetwork && `(${selectedNetwork})`}
-          </h2>
-          <div className="h-64">
-            <Pie data={networkDistribution} options={pieOptions} />
-          </div>
-          <p className="text-xs text-gray-500 mt-2 text-center">คลิกเพื่อกรองข้อมูล</p>
-        </div>
-
-        <div className="bg-white p-6 rounded-xl shadow-lg">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">เคสใหม่ต่อวัน</h2>
-          <div className="h-64">
-            <Bar data={dailyNewCases} options={chartOptions} />
-          </div>
-        </div>
-
-        <div className="bg-white p-6 rounded-xl shadow-lg">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">แนวโน้มความเสียหาย</h2>
-          <div className="h-64">
-            <Line data={lossHistory} options={chartOptions} />
-          </div>
-        </div>
-      </div>
-
-
-    </div>
+    </MantineProvider>
   );
 }
