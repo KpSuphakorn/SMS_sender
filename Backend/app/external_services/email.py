@@ -45,10 +45,10 @@ def smtp_connection():
     finally:
         server.quit()
 
-def send_email(subject, body, file_ids):
+def send_email(subject, body, file_ids, recipient=None):
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
-    msg['To'] = os.getenv("RECIPIENT_EMAIL")
+    msg['To'] = recipient if recipient else os.getenv("RECIPIENT_EMAIL")
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
@@ -63,7 +63,7 @@ def send_email(subject, body, file_ids):
 
     with smtp_connection() as server:
         server.send_message(msg)
-        print(f"Email sent with subject: {subject}")
+        print(f"Email sent with subject: {subject} to {msg['To']}")
 
 def is_status_object(status):
     return all(isinstance(s, dict) and "name" in s for s in status) if status else False
