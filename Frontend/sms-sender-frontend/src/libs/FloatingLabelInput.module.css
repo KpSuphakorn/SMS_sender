@@ -1,0 +1,45 @@
+/* Frontend/src/components/FloatingLabelInput/FloatingLabelInput.module.css (หรือที่ไหนก็ได้ที่คุณเก็บ component นี้) */
+
+/* Base styles for the input */
+.root {
+  position: relative;
+}
+
+/* Style for the floating label */
+.label {
+  position: absolute;
+  top: 8px; /* Adjust as needed */
+  left: 16px; /* Adjust as needed */
+  font-size: 16px;
+  color: var(--mantine-color-gray-6); /* Default label color */
+  pointer-events: none;
+  transition: transform 150ms ease, font-size 150ms ease;
+  z-index: 1; /* Ensure label is above input */
+  transform-origin: top left; /* For transform animation */
+}
+
+/* When the label is floating (input is focused or has value) */
+.label[data-floating="true"] {
+  transform: translateY(-33px) translateX(3px) scale(1); /* Moves up and scales down */
+  font-weight: 500;
+  color: var(--mantine-color-blue-6); /* Color when floating */
+}
+
+/* Style for the input element itself */
+.input {
+  padding: 7px; /* Make space for the floating label */
+  padding-left: 17px;
+  height: var(--mantine-control-height-md); /* Or any desired height */
+  font-size: 16px;
+}
+
+/* Style for the placeholder */
+.input::placeholder {
+  transition: opacity 150ms ease;
+  opacity: 0; /* Hide placeholder by default for floating label effect */
+}
+
+/* Show placeholder when label is not floating */
+.input:not([data-floating="true"])::placeholder {
+  opacity: 0.7; /* Show placeholder when not focused/no value */
+}

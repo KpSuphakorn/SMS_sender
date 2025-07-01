@@ -5,6 +5,7 @@ import { DatePicker } from "../../../libs/DatePicker";
 import { DatesRangeValue } from "@mantine/dates";
 import { Popover, Button } from '@mantine/core';
 import { searchData } from '@/libs/search';
+import { FloatingLabelInput } from '@/libs/FloatingLabelInput';
 
 // Helper function to map API status to display status
 const STATUS_ORDER = [
@@ -482,15 +483,6 @@ export default function AllDataPage() {
               ล้างตัวกรองทั้งหมด
             </button>
           )}
-          
-          {/* Search Input */}
-          <input
-          type="text"
-          placeholder="ค้นหา"
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)} 
-          className="w-auto px-4 py-2 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-shadow duration-200"
-        />
 
           {/* Period Filter Buttons */}
           <div className="flex gap-2 ml-auto">
@@ -513,7 +505,14 @@ export default function AllDataPage() {
             ))}
           </div>
         </div>
-
+        {/* Search Input */}
+          <FloatingLabelInput
+          label="ค้นหาข้อมูล"
+          value={searchTerm}
+          onChange={(event) => setSearchTerm(event.currentTarget.value)}
+          size="xs"
+          radius="xl"
+        />
         {/* Selection and Submit Section */}
         {filteredCases.length > 0 && (
           <div className="flex flex-row items-center gap-4 bg-blue-50 rounded-xl px-4 py-3 w-full">
@@ -585,6 +584,7 @@ export default function AllDataPage() {
             </div>
           )}
         </div>
+        
       </div>
 
       {/* Scrollable Cards Section */}
