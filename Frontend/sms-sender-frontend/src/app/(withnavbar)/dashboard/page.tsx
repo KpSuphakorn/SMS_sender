@@ -44,8 +44,8 @@ interface NetworkData {
 export default function Dashboard() {
   const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([
-    new Date(2025, 5, 20), // June 20, 2025
-    new Date(2025, 5, 30)  // June 30, 2025
+    new Date(), // Today: July 1, 2025
+    new Date()  // Today: July 1, 2025
   ]);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [selectedDate, setSelectedDate] = useState<string | null>(null); // For chart date filtering
@@ -288,7 +288,7 @@ export default function Dashboard() {
       if (elements.length > 0) {
         const index = elements[0].index;
         const dayOffset = index; // Assuming Monday (จ) is 0 days from start of week
-        const startDate = new Date(dateRange[0] || new Date(2025, 5, 20));
+        const startDate = new Date(dateRange[0] || new Date());
         const selected = new Date(startDate);
         selected.setDate(startDate.getDate() + dayOffset);
         setSelectedDate(selected.toISOString().split('T')[0]);
@@ -311,7 +311,7 @@ export default function Dashboard() {
 
   // Reset all filters
   const resetFilters = () => {
-    setDateRange([new Date(2025, 5, 20), new Date(2025, 5, 30)]);
+    setDateRange([new Date(), new Date()]);
     setStatusFilter("all");
     setSelectedNetwork(null);
     setSelectedDate(null);
