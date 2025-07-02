@@ -232,9 +232,12 @@ def check_inbox_and_save_reply():
                             bulk_updates = []
                             any_valid = False
                             
-                            # Process only the senders from the same provider
+                            # **แก้ไขส่วนนี้ - ประมวลผลเฉพาะ senders ที่พบในไฟล์เท่านั้น**
+                            matched_sender_keys = {(s["sender_name"], s["phone_number"]) for s in matched_senders}
+                            
                             for doc in provider_senders:
                                 sender_name = doc["sender_name"]
+                                phone_number = doc["phone_number"]
                                 user_id = doc["created_by"]
                                 updated_at = datetime.datetime.now()
                                 
@@ -242,25 +245,25 @@ def check_inbox_and_save_reply():
                                     print(f"Skipping update for {sender_name}: already has final status")
                                     continue
                                 
-                                is_valid = any(s["sender_name"] == sender_name for s in matched_senders)
+                                sender_key = (sender_name, phone_number)
+                                is_valid = sender_key in matched_sender_keys
+                                
                                 if is_valid:
                                     any_valid = True
-                                    # Only update if sender is found in response (received)
-                                    update_data, new_status = update_sender_status(doc, request_id, is_valid, reply_id)
-                                else:
-                                    # Only mark as error if this provider was supposed to have this sender
-                                    # and the sender is not found in the response
-                                    update_data, new_status = update_sender_status(doc, request_id, False, reply_id)
-                                bulk_updates.append(
-                                    UpdateOne(
-                                        {"sender_name": sender_name, "phone_number": doc["phone_number"], "request_ids.id": request_id},
-                                        {"$set": update_data}
+                                    print(f"Updating {sender_name} to 'received' status")
+                                    # อัปเดตเป็น received เฉพาะ sender ที่พบในไฟล์
+                                    update_data, new_status = update_sender_status(doc, request_id, True, reply_id)
+                                    
+                                    bulk_updates.append(
+                                        UpdateOne(
+                                            {"sender_name": sender_name, "phone_number": phone_number, "request_ids.id": request_id},
+                                            {"$set": update_data}
+                                        )
                                     )
-                                )
 
-                                if is_valid:
+                                    # บันทึกข้อมูลใน response_from_telco
                                     for sender in matched_senders:
-                                        if sender["sender_name"] == sender_name:
+                                        if sender["sender_name"] == sender_name and sender["phone_number"] == phone_number:
                                             response_from_telco.insert_one({
                                                 "sender_name": sender["sender_name"],
                                                 "phone_number": sender["phone_number"],
@@ -272,19 +275,24 @@ def check_inbox_and_save_reply():
                                                 "created_at": datetime.datetime.now(),
                                                 "updated_at": updated_at
                                             })
-                                
-                                # Only create notification if there's a status change
-                                if new_status:
-                                    notifications.insert_one({
-                                        "request_id": request_id,
-                                        "sender_name": sender_name,
-                                        "status": new_status,
-                                        "user_id": user_id,
-                                        "provider": reply_provider,
-                                        "is_read": False,
-                                        "thai_date": updated_at.strftime("%d %B %Y"),
-                                        "created_at": datetime.datetime.now()
-                                    })
+                                            break
+                                    
+                                    # สร้าง notification เฉพาะเมื่อมีการเปลี่ยนแปลงสถานะ
+                                    if new_status:
+                                        notifications.insert_one({
+                                            "request_id": request_id,
+                                            "sender_name": sender_name,
+                                            "status": new_status,
+                                            "user_id": user_id,
+                                            "provider": reply_provider,
+                                            "is_read": False,
+                                            "thai_date": updated_at.strftime("%d %B %Y"),
+                                            "created_at": datetime.datetime.now()
+                                        })
+                                else:
+                                    # **ไม่ทำอะไรกับ sender ที่ไม่พบในไฟล์**
+                                    # เหตุผล: อาจเป็น sender ของ provider อื่น ที่ยังรอการตอบกลับ
+                                    print(f"Sender {sender_name} not found in {reply_provider} response - keeping current status")
                             
                             if bulk_updates:
                                 sender_names.bulk_write(bulk_updates)
@@ -296,8 +304,80 @@ def check_inbox_and_save_reply():
                             
                             mail.store(num, '+FLAGS', '\\Seen')
                             break
+                            
+            # **เพิ่ม logic สำหรับการตรวจสอบ error cases**
+            # ตรวจสอบ senders ที่ยังเป็น pending นานเกินไป (เช่น 24 ชั่วโมง)
+            # และ mark เป็น error ถ้าไม่ได้รับการตอบกลับ
+            check_timeout_senders()
+                            
     except Exception as e:
         print(f"Error checking inbox: {str(e)}")
+
+def check_timeout_senders():
+    """
+    ตรวจสอบและ mark senders ที่ pending นานเกินไปเป็น error
+    """
+    try:
+        sender_names = sender_names_collection()
+        notifications = notifications_collection()
+        
+        # หาทุก sender ที่ยัง pending และเกิน timeout (24 ชั่วโมง)
+        timeout_threshold = datetime.datetime.now() - datetime.timedelta(hours=24)
+        
+        timeout_senders = list(sender_names.find({
+            "request_ids": {
+                "$elemMatch": {
+                    "status": {"$in": ["pending", "suspension_requested"]}
+                }
+            },
+            "updated_at": {"$lt": timeout_threshold}
+        }))
+        
+        bulk_updates = []
+        
+        for doc in timeout_senders:
+            sender_name = doc["sender_name"]
+            user_id = doc["created_by"]
+            updated_at = datetime.datetime.now()
+            
+            # หา request_ids ที่ยัง pending
+            pending_requests = [
+                req for req in doc.get("request_ids", [])
+                if req["status"] in ["pending", "suspension_requested"]
+            ]
+            
+            for req in pending_requests:
+                request_id = req["id"]
+                
+                # อัปเดตสถานะเป็น error
+                update_data, new_status = update_sender_status(doc, request_id, False, None)
+                
+                bulk_updates.append(
+                    UpdateOne(
+                        {"sender_name": sender_name, "phone_number": doc["phone_number"], "request_ids.id": request_id},
+                        {"$set": update_data}
+                    )
+                )
+                
+                # สร้าง notification
+                if new_status:
+                    notifications.insert_one({
+                        "request_id": request_id,
+                        "sender_name": sender_name,
+                        "status": "error",
+                        "user_id": user_id,
+                        "provider": doc.get("mobile_provider", "unknown"),
+                        "is_read": False,
+                        "thai_date": updated_at.strftime("%d %B %Y"),
+                        "created_at": datetime.datetime.now()
+                    })
+        
+        if bulk_updates:
+            sender_names.bulk_write(bulk_updates)
+            print(f"Marked {len(bulk_updates)} timeout senders as error")
+            
+    except Exception as e:
+        print(f"Error checking timeout senders: {str(e)}")
 
 def check_response_contains_senders(file_data, senders, filename):
     try:
