@@ -1,5 +1,6 @@
 "use client";
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useSession } from "next-auth/react";
 import getAvailableSenders from "@/libs/getAvailableSenders";
 import { DatePicker } from "../../../libs/DatePicker";
 import { DatesRangeValue } from "@mantine/dates";
@@ -101,14 +102,13 @@ const formatDateRange = (dateRange: DatesRangeValue): string => {
 };
 
 // API function to create request
-const createRequest = async (data: any, tokens: string) => {
+const createRequest = async (data: any, token: string | undefined) => {
   const URL = process.env.NEXT_PUBLIC_BACKEND_URL || '';
-  const token = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI2ODRmYjFkY2ZmOTI3OWMwNGJiOTczYmEiLCJlbWFpbCI6InRoYW1AZ21haWwuY29tIiwibmFtZSI6IlRob3JudGhhbiBMZXJkaGlydW53b25nIiwicm9sZSI6InVzZXIiLCJleHAiOjE3NTM0MTE3MzR9.rvaYFb7UFy9zAIabdaShRstGSuPzxJBi4GtA7EZfjJE`
   return fetch(`${URL}/api/request`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify(data)
   }).then(res => res.json());
@@ -132,6 +132,7 @@ interface CaseData {
 }
 
 export default function AllDataPage() {
+  const { data: session } = useSession();
   const [dateRange, setDateRange] = useState<DatesRangeValue>([null, null]);
   const [selectedCase, setSelectedCase] = useState<CaseData | null>(null);
   const [allCases, setAllCases] = useState<CaseData[]>([]);
@@ -324,8 +325,8 @@ export default function AllDataPage() {
         }))
       };
 
-      // Get token (you may need to implement this based on your auth system)
-      const token = localStorage.getItem('token') || '';
+      // Get token from session (use only session.user.token)
+      const token = session?.user?.token;
 
       // Submit to API
       const response = await createRequest(requestData, token);
@@ -360,7 +361,7 @@ export default function AllDataPage() {
     } finally {
       setIsSubmitting(false);
     }
-  }, [selectedCases, allCases]);
+  }, [selectedCases, allCases, session]);
 
   // Clear selection when filters change
   useEffect(() => {
@@ -446,10 +447,8 @@ export default function AllDataPage() {
             <Popover.Dropdown>
               <div className="p-2">
                 <DatePicker
-                  type="range"
                   value={dateRange}
                   onChange={handleDateRangeChange}
-                  locale="th"
                 />
                 {/* Show instruction text when only start date is selected */}
                 {dateRange[0] && !dateRange[1] && (
