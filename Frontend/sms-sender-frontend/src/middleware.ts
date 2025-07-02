@@ -19,7 +19,7 @@ export async function middleware(request: NextRequest) {
     !request.nextUrl.pathname.startsWith('/all-data') &&
     !request.nextUrl.pathname.startsWith('/mainmenu')
   ) {
-    return NextResponse.redirect(new URL('/all-data', request.url));
+    return NextResponse.redirect(new URL('/nice-try', request.url));
   }
 
   // If admin, allow access to all pages
