@@ -7,6 +7,7 @@ import { DatesRangeValue } from "@mantine/dates";
 import { Popover, Button } from '@mantine/core';
 import { searchData } from '@/libs/search';
 import { FloatingLabelInput } from '@/libs/FloatingLabelInput';
+import { CheckCircle, Filter } from "lucide-react";
 
 // Helper function to map API status to display status
 const STATUS_ORDER = [
@@ -514,26 +515,28 @@ export default function AllDataPage() {
         />
         {/* Selection and Submit Section */}
         {filteredCases.length > 0 && (
-          <div className="flex flex-row items-center gap-4 bg-blue-50 rounded-xl px-4 py-3 w-full">
+          <div className="flex flex-row items-center gap-4 bg-gray-50 rounded-xl px-4 py-3 w-full">
             <div className="flex items-center gap-4">
               {/* Select All Checkbox */}
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={isAllVisibleSelected}
-                  onChange={handleSelectAllToggle}
-                  className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                />
-                <span className="font-semibold text-gray-700">
-                  เลือกทั้งหมด ({filteredCases.length} เคส)
+              <button
+                onClick={handleSelectAllToggle}
+                className={`flex items-center space-x-3 px-6 py-3 rounded-xl font-semibold transition-all duration-200 ${
+                  isAllVisibleSelected
+                    ? 'bg-gradient-to-r from-red-100 to-red-200 text-red-700 hover:from-red-200 hover:to-red-300' 
+                    : 'bg-gradient-to-r from-blue-100 to-indigo-200 text-blue-700 hover:from-blue-200 hover:to-indigo-300'
+                }`}
+              >
+                <CheckCircle className="w-5 h-5" />
+                <span className="font-semibold text-gray-700">{ isAllVisibleSelected ? 'ยกเลิกเลือกทั้งหมด' : 'เลือกทั้งหมด'} ({filteredCases.length} เคส)
                 </span>
-              </label>
-
-              {/* Selected Count */}
+              </button>
+              {/* Selection summary right of Select All */}
               {selectedCases.size > 0 && (
-                <span className="text-blue-700 font-semibold">
-                  เลือกแล้ว: {selectedCases.size} เคส
-                </span>
+                <div className="bg-gradient-to-r from-green-50 to-emerald-50 px-4 py-2 rounded-xl border border-green-200">
+                  <span className="text-green-800 font-semibold">
+                    เลือกแล้ว {selectedCases.size} จาก {filteredCases.length} รายการ
+                  </span>
+                </div>
               )}
             </div>
 
@@ -552,10 +555,10 @@ export default function AllDataPage() {
               <button
                 onClick={handleSubmit}
                 disabled={selectedCases.size === 0 || isSubmitting}
-                className={`px-6 py-2 rounded-lg font-semibold transition-all duration-200 ${
-                  selectedCases.size === 0 || isSubmitting
-                    ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : 'bg-blue-600 text-white hover:bg-blue-700 shadow-md hover:shadow-lg'
+                className={`flex items-center space-x-3 px-8 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg ${
+                  selectedCases.size > 0 || isSubmitting
+                    ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emeral-700 text-white shadow-green-200 hover:shadow-green-300 transform hover:scale-105'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed shadow-gray-200'
                 }`}
               >
                 {isSubmitting ? (
