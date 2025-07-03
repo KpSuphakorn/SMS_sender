@@ -1,6 +1,9 @@
 "use client";
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback } from "react";
 import { Calendar, Users, Phone, CheckCircle, XCircle, Eye, Filter, Search, Bell, FileText, Clock, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
+import { DatePicker } from "../../../libs/DatePicker";
+import { DatesRangeValue } from '@mantine/dates';
+import { Popover, Button } from '@mantine/core';
 
 // Types
 interface Status {
@@ -101,6 +104,75 @@ const formatDate = (dateStr: string): string => {
   });
 };
 
+// Helper function to format date range display
+const formatDateRange = (dateRange: DatesRangeValue): string => {
+  const [start, end] = dateRange;
+  
+  const format = (d: any): string => {
+    if (!d) return "";
+    
+    // Handle different date formats
+    let date: Date;
+    if (d instanceof Date) {
+      date = d;
+    } else if (typeof d === 'string') {
+      date = new Date(d);
+    } else if (d && typeof d === 'object' && d.$date) {
+      date = new Date(d.$date);
+    } else {
+      return "";
+    }
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) return "";
+    
+    return date.toLocaleDateString('th-TH');
+  };
+
+  if (!start && !end) return "เลือกช่วงวันที่";
+  if (start && !end) return format(start);
+  if (start && end) return `${format(start)} - ${format(end)}`;
+  return "เลือกช่วงวันที่";
+};
+
+// Helper function to check if a date is within range
+const isDateInRange = (dateStr: string, startDate: any, endDate: any): boolean => {
+  if (!startDate && !endDate) return true;
+  
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return false;
+  
+  // Convert start and end dates to proper Date objects
+  const start = startDate ? (startDate instanceof Date ? startDate : new Date(startDate)) : null;
+  const end = endDate ? (endDate instanceof Date ? endDate : new Date(endDate)) : null;
+  
+  // Check if converted dates are valid
+  const isStartValid = start ? !isNaN(start.getTime()) : true;
+  const isEndValid = end ? !isNaN(end.getTime()) : true;
+  
+  if (!isStartValid && !isEndValid) return true;
+  
+  if (start && end && isStartValid && isEndValid) {
+    // Set time to start/end of day for proper comparison
+    const startOfDay = new Date(start);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(end);
+    endOfDay.setHours(23, 59, 59, 999);
+    
+    return date >= startOfDay && date <= endOfDay;
+  } else if (start && isStartValid) {
+    const startOfDay = new Date(start);
+    startOfDay.setHours(0, 0, 0, 0);
+    return date >= startOfDay;
+  } else if (end && isEndValid) {
+    const endOfDay = new Date(end);
+    endOfDay.setHours(23, 59, 59, 999);
+    return date <= endOfDay;
+  }
+  
+  return true;
+};
+
 // Components
 const Header = ({ bookCount, selectedCount }: { bookCount: number; selectedCount: number }) => (
   <div className="bg-white shadow-lg border-b border-gray-200">
@@ -143,10 +215,10 @@ const SearchAndFilters = ({
   setSearchTerm,
   statusFilter,
   setStatusFilter,
-  fromDate,
-  setFromDate,
-  toDate,
-  setToDate,
+  dateRange,
+  setDateRange,
+  popoverOpened,
+  setPopoverOpened,
   totalBooks,
   filteredCount
 }: {
@@ -154,13 +226,21 @@ const SearchAndFilters = ({
   setSearchTerm: (value: string) => void;
   statusFilter: string;
   setStatusFilter: (value: string) => void;
-  fromDate: string;
-  setFromDate: (value: string) => void;
-  toDate: string;
-  setToDate: (value: string) => void;
+  dateRange: DatesRangeValue;
+  setDateRange: (value: DatesRangeValue) => void;
+  popoverOpened: boolean;
+  setPopoverOpened: (value: boolean) => void;
   totalBooks: number;
   filteredCount: number;
-}) => (
+}) => {
+  const handleClearAll = () => {
+    setSearchTerm("");
+    setStatusFilter("");
+    setDateRange([null, null]);
+    setPopoverOpened(false);
+  };
+
+  return (
   <div className="bg-white rounded-2xl shadow-lg p-8 mb-8 border border-gray-100">
     <div className="flex items-center justify-between mb-6">
       <h2 className="text-xl font-semibold text-gray-800 flex items-center">
@@ -208,26 +288,75 @@ const SearchAndFilters = ({
       {/* Date Range */}
       <div>
         <label className="block text-sm font-medium text-gray-700 mb-2">ช่วงวันที่</label>
-        <div className="space-y-2">
-          <input
-            type="date"
-            placeholder="วันที่เริ่มต้น"
-            className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 text-sm"
-            value={fromDate}
-            onChange={e => setFromDate(e.target.value)}
-          />
-          <input
-            type="date"
-            placeholder="วันที่สิ้นสุด"
-            className="w-full px-4 py-2 border-2 border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-all duration-200 text-sm"
-            value={toDate}
-            onChange={e => setToDate(e.target.value)}
-          />
-        </div>
+        <Popover
+          opened={popoverOpened}
+          onChange={setPopoverOpened}
+          position="bottom-start"
+          withArrow
+          shadow="md"
+        >
+          <Popover.Target>
+            <Button
+              variant="outline"
+              onClick={() => setPopoverOpened(!popoverOpened)}
+              size="md"
+              color="blue"
+              radius="md"
+              className="w-full h-12"
+            >
+              {formatDateRange(dateRange)}
+            </Button>
+          </Popover.Target>
+          <Popover.Dropdown>
+            <div className="p-2">
+              <DatePicker
+                value={dateRange}
+                onChange={(value) => {
+                  const newRange = value as DatesRangeValue;
+                  setDateRange(newRange);
+                  
+                  // Only close popover if both dates are selected or if range is cleared
+                  const [start, end] = newRange;
+                  if ((start && end) || (!start && !end)) {
+                    setPopoverOpened(false);
+                  }
+                }}
+              />
+              {/* Show instruction text when only start date is selected */}
+              {dateRange[0] && !dateRange[1] && (
+                <div className="text-sm text-blue-600 mt-2 text-center">
+                  กรุณาเลือกวันที่สิ้นสุด
+                </div>
+              )}
+              {/* Manual close button if needed */}
+              <div className="flex justify-end mt-2">
+                <button
+                  onClick={() => setPopoverOpened(false)}
+                  className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded transition-colors"
+                >
+                  ปิด
+                </button>
+              </div>
+            </div>
+          </Popover.Dropdown>
+        </Popover>
       </div>
     </div>
+
+    {/* Clear All Filters Button */}
+    {((dateRange[0] || dateRange[1]) || statusFilter || searchTerm) && (
+      <div className="flex justify-center mt-4">
+        <button
+          onClick={handleClearAll}
+          className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors text-sm"
+        >
+          ล้างตัวกรองทั้งหมด
+        </button>
+      </div>
+    )}
   </div>
-);
+  );
+};
 
 const BookCard = ({
   book,
@@ -507,12 +636,24 @@ const CaseModal = ({
 // Main component
 export default function SupportLetterPage() {
   const [books] = useState<Book[]>(createDummyBooks());
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
+  const [dateRange, setDateRange] = useState<DatesRangeValue>([null, null]);
   const [selected, setSelected] = useState<string[]>([]);
   const [modalBook, setModalBook] = useState<Book | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [popoverOpened, setPopoverOpened] = useState(false);
+
+  // Handle date range change
+  const handleDateRangeChange = useCallback((range: DatesRangeValue) => {
+    setDateRange(range);
+    
+    // Only close popover if both dates are selected or if range is cleared
+    const [start, end] = range;
+    if ((start && end) || (!start && !end)) {
+      setPopoverOpened(false);
+    }
+    // Keep popover open if only start date is selected (waiting for end date)
+  }, []);
 
   // Enhanced filtering logic
   const filteredBooks = useMemo(() => {
@@ -527,13 +668,11 @@ export default function SupportLetterPage() {
       const statusMatch = statusFilter === "" || book.status === statusFilter;
 
       // Date range filter
-      const bookDate = new Date(book.date);
-      const fromDateMatch = fromDate === "" || bookDate >= new Date(fromDate);
-      const toDateMatch = toDate === "" || bookDate <= new Date(toDate);
+      const dateMatch = isDateInRange(book.date, dateRange[0], dateRange[1]);
 
-      return searchMatch && statusMatch && fromDateMatch && toDateMatch;
+      return searchMatch && statusMatch && dateMatch;
     });
-  }, [books, searchTerm, statusFilter, fromDate, toDate]);
+  }, [books, searchTerm, statusFilter, dateRange]);
 
   const handleCheck = (id: string) => {
     setSelected((prev) =>
@@ -550,6 +689,13 @@ export default function SupportLetterPage() {
     } else {
       setSelected(prev => [...new Set([...prev, ...filteredBookIds])]);
     }
+  };
+
+  const handleClearAllFilters = () => {
+    setSearchTerm("");
+    setStatusFilter("");
+    setDateRange([null, null]);
+    setPopoverOpened(false);
   };
 
   const handleApprove = () => {
@@ -569,10 +715,10 @@ export default function SupportLetterPage() {
           setSearchTerm={setSearchTerm}
           statusFilter={statusFilter}
           setStatusFilter={setStatusFilter}
-          fromDate={fromDate}
-          setFromDate={setFromDate}
-          toDate={toDate}
-          setToDate={setToDate}
+          dateRange={dateRange}
+          setDateRange={handleDateRangeChange}
+          popoverOpened={popoverOpened}
+          setPopoverOpened={setPopoverOpened}
           totalBooks={books.length}
           filteredCount={filteredBooks.length}
         />
@@ -642,12 +788,7 @@ export default function SupportLetterPage() {
             <h3 className="text-2xl font-bold text-gray-900 mb-2">ไม่พบรายการที่ตรงกับเงื่อนไข</h3>
             <p className="text-gray-600 mb-6">ลองปรับเปลี่ยนคำค้นหาหรือเงื่อนไขการกรอง</p>
             <button
-              onClick={() => {
-                setSearchTerm("");
-                setStatusFilter("");
-                setFromDate("");
-                setToDate("");
-              }}
+              onClick={handleClearAllFilters}
               className="px-6 py-3 bg-gradient-to-r from-blue-500 to-indigo-600 text-white rounded-xl font-semibold hover:from-blue-600 hover:to-indigo-700 transition-all duration-200"
             >
               ล้างตัวกรอง
