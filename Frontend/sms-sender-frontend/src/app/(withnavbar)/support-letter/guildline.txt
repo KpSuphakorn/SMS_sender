@@ -1,0 +1,15 @@
+support-letter/
+├── page.tsx (main component - now much cleaner)
+├── types.ts (TypeScript interfaces)
+├── constants.ts (color mappings and labels)
+├── utils.ts (utility functions)
+├── mockData.ts (dummy data generator)
+└── components/
+    ├── index.ts (barrel export)
+    ├── Header.tsx
+    ├── SearchAndFilters.tsx
+    ├── BulkActionsBar.tsx
+    ├── BookCard.tsx
+    ├── CaseModal.tsx
+    ├── NoResults.tsx
+    └── FloatingActionButton.tsx
