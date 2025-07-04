@@ -7,7 +7,8 @@ import { DatesRangeValue } from "@mantine/dates";
 import { Popover, Button } from '@mantine/core';
 import { searchData } from '@/libs/search';
 import { FloatingLabelInput } from '@/libs/FloatingLabelInput';
-import { CheckCircle, Filter } from "lucide-react";
+import { CheckCircle, Filter, Download } from "lucide-react";
+import * as XLSX from 'xlsx';
 
 // Helper function to map API status to display status
 const STATUS_ORDER = [
@@ -369,6 +370,51 @@ export default function AllDataPage() {
     setSelectedCases(new Set());
   }, [dateRange, showUnsentOnly, searchTerm]);
 
+  // Export to Excel
+  const handleExportToExcel = useCallback(() => {
+    if (selectedCases.size === 0) return;
+
+    // Get selected case data
+    const selectedCaseData = allCases.filter(c => selectedCases.has(c.id));
+
+    // Prepare data for Excel
+    const exportData = selectedCaseData.map(caseItem => ({
+      'วันที่': new Date(caseItem.date).toLocaleDateString('th-TH'),
+      'Sender': caseItem.sender,
+      'ชื่อเต็ม': caseItem.full_name || 'ไม่ระบุ',
+      'เบอร์โทร': caseItem.phone_number,
+      'ค่ายมือถือ': caseItem.telco,
+      'Actual Telco': caseItem.actualTelco,
+      'สถานะ': caseItem.statuses.map(s => s.done ? `${s.label} ✓` : s.label).join(', '),
+      'รายละเอียด': caseItem.details,
+    }));
+
+    // Create a new workbook and worksheet
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet(exportData);
+
+    // Add worksheet to workbook
+    XLSX.utils.book_append_sheet(wb, ws, "รายงานเคส");
+
+    // Generate buffer
+    const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+
+    // Create a blob from the buffer and generate a download link
+    const blob = new Blob([buf], { type: "application/octet-stream" });
+    const url = URL.createObjectURL(blob);
+
+    // Create a link element and click it programmatically
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `รายงานเคส_${selectedCases.size}_เคส_${new Date().toLocaleString('th-TH')}.xlsx`);
+    document.body.appendChild(link);
+    link.click();
+
+    // Clean up
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  }, [selectedCases, allCases]);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-white px-4 py-8 flex flex-col items-center justify-center">
@@ -540,7 +586,7 @@ export default function AllDataPage() {
               )}
             </div>
 
-            {/* Submit Button */}
+            {/* Export and Submit Buttons */}
             <div className="flex items-center gap-2 ml-auto">
               {submitSuccess && (
                 <span className="text-green-600 font-semibold text-sm">
@@ -552,6 +598,20 @@ export default function AllDataPage() {
                   ✗ {submitError}
                 </span>
               )}
+              {/* Export Button */}
+              <button
+                onClick={handleExportToExcel}
+                disabled={selectedCases.size === 0}
+                className={`flex items-center space-x-3 px-6 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg ${
+                  selectedCases.size > 0
+                    ? 'bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-blue-200 hover:shadow-blue-300 transform hover:scale-105'
+                    : 'bg-gray-300 text-gray-500 cursor-not-allowed shadow-gray-200'
+                }`}
+              >
+                <Download className="w-4 h-4" />
+                {selectedCases.size > 0 ? `ส่งออก Excel (${selectedCases.size})` : 'ส่งออก Excel'}
+              </button>
+              {/* Submit Button */}
               <button
                 onClick={handleSubmit}
                 disabled={selectedCases.size === 0 || isSubmitting}
