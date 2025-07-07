@@ -9,7 +9,6 @@ from email import encoders
 from dotenv import load_dotenv
 from app.models.database import grid_fs
 from app.models.sender_names import sender_names_collection
-from app.models.notification import notifications_collection
 from app.models.response_from_telco import response_from_telco_collection
 import datetime
 import pandas as pd
@@ -21,7 +20,6 @@ from typing import Optional
 from app.schemas.request import SenderRequest
 from app.utils.pdf import generate_custom_pdf_and_store, generate_suspension_pdf
 from app.external_services.email import check_inbox_and_save_reply, send_email
-from app.external_services.notification import create_notification
 from app.dependencies import get_current_user
 from app.utils.helpers import convert_objectid_to_str, format_sender_doc, is_status_object
 from bson.objectid import ObjectId
@@ -161,10 +159,6 @@ def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(ge
                 "phone_number": phone_number,
                 "reused_request_id": next((req["id"] for req in existing_doc.get("request_ids", []) if req["status"] == "received"), None)
             })
-            create_notification(
-                request_id, sender_name, "skipped", current_user["id"], 
-                updated_at.strftime("%d %B %Y")
-            )
             continue
 
         # Handle existing telco data
@@ -213,18 +207,6 @@ def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(ge
                 "phone_number": phone_number,
                 "reused_request_id": telco_doc.get("request_id")
             })
-            create_notification(
-                request_id, sender_name, "pending", current_user["id"], 
-                updated_at.strftime("%d %B %Y")
-            )
-            create_notification(
-                request_id, sender_name, "suspension_requested", current_user["id"], 
-                updated_at.strftime("%d %B %Y")
-            )
-            create_notification(
-                request_id, sender_name, "received", current_user["id"], 
-                updated_at.strftime("%d %B %Y")
-            )
             continue
 
         # Add to request list
@@ -246,7 +228,7 @@ def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(ge
         suspension_pdf_id = generate_suspension_pdf(request_id, updated_at_str)
         subject = f"ขอข้อมูลและระงับสัญญาณ (Request ID: {request_id})"
         body = f"เรียนเจ้าหน้าที่ กสทช\n\nRequest ID: {request_id}\nวันที่: {updated_at_str}\nกรุณาดำเนินการระงับสัญญาณและส่งข้อมูลกลับในรูปแบบ Excel/CSV"
-        send_email(subject, body, [data_pdf_id, suspension_pdf_id])
+        send_email(subject, body, [data_pdf_id, suspension_pdf_id])  # No recipient parameter, defaults to NBTC
 
         # Update sender documents with NBTC PDF IDs
         for row in rows_to_request:
@@ -273,10 +255,6 @@ def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(ge
                     "updated_at": updated_at
                 })
 
-            # Create notifications
-            create_notification(request_id, row["sender_name"], "pending", current_user["id"], updated_at_str)
-            create_notification(request_id, row["sender_name"], "suspension_requested", current_user["id"], updated_at_str)
-
     # Execute bulk updates
     if bulk_updates:
         sender_names.bulk_write(bulk_updates)
@@ -289,18 +267,7 @@ def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(ge
         "requested_senders": [r["sender_name"] for r in rows_to_request]
     }
 
-@router.post("/notification/mark-read/{notification_id}")
-def mark_notification_read_endpoint(notification_id: str, current_user: dict = Depends(get_current_user)):
-    notifications = notifications_collection()
-    result = notifications.update_one(
-        {"_id": ObjectId(notification_id), "user_id": current_user["id"]},
-        {"$set": {"is_read": True, "updated_at": datetime.datetime.now()}}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Notification not found")
-    return {"message": "Marked as read" if result.modified_count else "Notification already marked as read"}
-
-@router.post("/request/complete-suspension/{request_id}/{sender_name}")
+@router.post("/complete-suspension/{request_id}/{sender_name}")
 def complete_suspension_endpoint(request_id: str, sender_name: str):
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
@@ -344,24 +311,7 @@ def complete_suspension_endpoint(request_id: str, sender_name: str):
             },
             upsert=True
         )
-        create_notification(request_id, sender_name, "suspended", doc["created_by"], updated_at.strftime("%d %B %Y"))
     return {"message": "Suspension completed for sender" if result.modified_count else "Sender already marked as suspended"}
-
-@router.get("/notifications")
-def get_notifications_endpoint(current_user: dict = Depends(get_current_user)):
-    notifications = notifications_collection()
-    return [
-        {
-            "notification_id": str(doc["_id"]),
-            "request_id": doc["request_id"],
-            "sender_name": doc.get("sender_name", ""),
-            "status": doc["status"],
-            "date": doc["thai_date"],
-            "is_read": doc["is_read"],
-            "created_at": doc["created_at"]
-        }
-        for doc in notifications.find({"user_id": current_user["id"]}).sort("created_at", -1)
-    ]
 
 @router.get("/available-senders")
 def get_available_senders_endpoint(start: Optional[str] = Query(None), end: Optional[str] = Query(None)):
