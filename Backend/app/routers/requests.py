@@ -23,7 +23,7 @@ from app.external_services.email import check_inbox_and_save_reply, send_email
 from app.dependencies import get_current_user
 from app.utils.helpers import convert_objectid_to_str, format_sender_doc, is_status_object
 from bson.objectid import ObjectId
-import uuid
+import random
 import asyncio
 from fastapi.responses import FileResponse
 from collections import defaultdict
@@ -37,14 +37,22 @@ PROVIDER_EMAILS = {
     "dtac": os.getenv("PROVIDER_EMAIL_DTAC"),
     "true": os.getenv("PROVIDER_EMAIL_TRUE"),
     "nt": os.getenv("PROVIDER_EMAIL_NT"),
-    "nbtc": os.getenv("PROVIDER_EMAIL_NBTC")  # NBTC email for sending all requests
+    "nbtc": os.getenv("PROVIDER_EMAIL_NBTC")
 }
+
+def generate_request_id():
+    """Generate a random 8-digit numeric request_id and ensure uniqueness"""
+    sender_names = sender_names_collection()
+    while True:
+        request_id = str(random.randint(10000000, 99999999))  # 8-digit random number
+        if not sender_names.find_one({"request_ids.id": request_id}):
+            return request_id
 
 @router.post("/request")
 def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(get_current_user)):
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
-    request_id = str(uuid.uuid4())
+    request_id = generate_request_id()
     updated_at = datetime.datetime.now()
     rows_to_request = []
     existing_data = []
@@ -228,7 +236,7 @@ def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(ge
         suspension_pdf_id = generate_suspension_pdf(request_id, updated_at_str)
         subject = f"ขอข้อมูลและระงับสัญญาณ (Request ID: {request_id})"
         body = f"เรียนเจ้าหน้าที่ กสทช\n\nRequest ID: {request_id}\nวันที่: {updated_at_str}\nกรุณาดำเนินการระงับสัญญาณและส่งข้อมูลกลับในรูปแบบ Excel/CSV"
-        send_email(subject, body, [data_pdf_id, suspension_pdf_id])  # No recipient parameter, defaults to NBTC
+        send_email(subject, body, [data_pdf_id, suspension_pdf_id])
 
         # Update sender documents with NBTC PDF IDs
         for row in rows_to_request:
