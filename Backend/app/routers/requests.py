@@ -39,7 +39,7 @@ PROVIDER_EMAILS = {
     "dtac": os.getenv("PROVIDER_EMAIL_DTAC"),
     "true": os.getenv("PROVIDER_EMAIL_TRUE"),
     "nt": os.getenv("PROVIDER_EMAIL_NT"),
-    "unknown": os.getenv("PROVIDER_EMAIL_NBTC")  # Use NBTC email for unknown or null providers
+    "nbtc": os.getenv("PROVIDER_EMAIL_NBTC")  # NBTC email for sending all requests
 }
 
 @router.post("/request")
@@ -239,53 +239,43 @@ def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(ge
                 )
             )
 
-    # Group rows by mobile provider and send emails
+    # Send all requests to NBTC
     if rows_to_request:
         updated_at_str = updated_at.strftime("%d %B %Y")
-        # Group rows by mobile provider
-        provider_groups = defaultdict(list)
+        data_pdf_id = generate_custom_pdf_and_store(rows_to_request, data.fields, request_id, updated_at_str)
+        suspension_pdf_id = generate_suspension_pdf(request_id, updated_at_str)
+        subject = f"ขอข้อมูลและระงับสัญญาณ (Request ID: {request_id})"
+        body = f"เรียนเจ้าหน้าที่ กสทช\n\nRequest ID: {request_id}\nวันที่: {updated_at_str}\nกรุณาดำเนินการระงับสัญญาณและส่งข้อมูลกลับในรูปแบบ Excel/CSV"
+        send_email(subject, body, [data_pdf_id, suspension_pdf_id])
+
+        # Update sender documents with NBTC PDF IDs
         for row in rows_to_request:
-            provider = row.get("mobile_provider", "unknown").lower() if row.get("mobile_provider") else "unknown"
-            provider_groups[provider].append(row)
-
-        # Process each provider group
-        for provider, rows in provider_groups.items():
-            provider_email = PROVIDER_EMAILS.get(provider, PROVIDER_EMAILS["unknown"])
-            data_pdf_id = generate_custom_pdf_and_store(rows, data.fields, request_id, updated_at_str)
-            suspension_pdf_id = generate_suspension_pdf(request_id, updated_at_str)
-            subject = f"ขอข้อมูลและระงับสัญญาณ (Request ID: {request_id}, Provider: {provider})"
-            body = f"เรียนเจ้าหน้าที่ {provider.capitalize()}\n\nRequest ID: {request_id}\nวันที่: {updated_at_str}\nกรุณาดำเนินการระงับสัญญาณและส่งข้อมูลกลับในรูปแบบ Excel/CSV"
-            send_email(subject, body, [data_pdf_id, suspension_pdf_id], recipient=provider_email)
-
-            # Update sender documents with provider-specific PDF IDs
-            for row in rows:
-                sender_name = row["sender_name"]
-                phone_number = row["phone_number"]
-                if not sender_map.get((sender_name, phone_number)):
-                    print(f"Inserting new sender: {sender_name}")
-                    sender_names.insert_one({
-                        "sender_name": sender_name,
-                        "phone_number": phone_number,
-                        "mobile_provider": row.get("mobile_provider", "unknown"),
-                        "full_name": row.get("full_name"),
-                        "date": row.get("date"),
-                        "request_ids": [{"id": request_id, "status": "pending"}],
-                        "fields": data.fields,
-                        "status": [
-                            {"name": "pending", "updated_at": updated_at},
-                            {"name": "suspension_requested", "updated_at": updated_at}
-                        ],
-                        "pdf_sent_data_id": data_pdf_id,
-                        "pdf_sent_suspension_id": suspension_pdf_id,
-                        "created_by": current_user["id"],
-                        "created_at": datetime.datetime.now(),
-                        "updated_at": updated_at
-                    })
+            sender_name = row["sender_name"]
+            phone_number = row["phone_number"]
+            if not sender_map.get((sender_name, phone_number)):
+                print(f"Inserting new sender: {sender_name}")
+                sender_names.insert_one({
+                    "sender_name": sender_name,
+                    "phone_number": phone_number,
+                    "mobile_provider": row.get("mobile_provider", "unknown"),
+                    "full_name": row.get("full_name"),
+                    "date": row.get("date"),
+                    "request_ids": [{"id": request_id, "status": "pending"}],
+                    "fields": data.fields,
+                    "status": [
+                        {"name": "pending", "updated_at": updated_at},
+                        {"name": "suspension_requested", "updated_at": updated_at}
+                    ],
+                    "pdf_sent_data_id": data_pdf_id,
+                    "pdf_sent_suspension_id": suspension_pdf_id,
+                    "created_by": current_user["id"],
+                    "created_at": datetime.datetime.now(),
+                    "updated_at": updated_at
+                })
 
             # Create notifications
-            for row in rows:
-                create_notification(request_id, row["sender_name"], "pending", current_user["id"], updated_at_str)
-                create_notification(request_id, row["sender_name"], "suspension_requested", current_user["id"], updated_at_str)
+            create_notification(request_id, row["sender_name"], "pending", current_user["id"], updated_at_str)
+            create_notification(request_id, row["sender_name"], "suspension_requested", current_user["id"], updated_at_str)
 
     # Execute bulk updates
     if bulk_updates:

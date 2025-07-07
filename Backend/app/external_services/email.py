@@ -31,7 +31,7 @@ PROVIDER_EMAILS = {
     "dtac": os.getenv("PROVIDER_EMAIL_DTAC"),
     "true": os.getenv("PROVIDER_EMAIL_TRUE"),
     "nt": os.getenv("PROVIDER_EMAIL_NT"),
-    "unknown": os.getenv("PROVIDER_EMAIL_NBTC")
+    "nbtc": os.getenv("PROVIDER_EMAIL_NBTC")
 }
 
 @contextmanager
@@ -54,10 +54,10 @@ def smtp_connection():
     finally:
         server.quit()
 
-def send_email(subject, body, file_ids, recipient=None):
+def send_email(subject, body, file_ids):
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
-    msg['To'] = recipient if recipient else os.getenv("RECIPIENT_EMAIL")
+    msg['To'] = PROVIDER_EMAILS["nbtc"]  # Always send to NBTC
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
@@ -143,6 +143,8 @@ def get_provider_from_email(email_address):
         return "true"
     elif "nt" in email_lower or "tot" in email_lower:
         return "nt"
+    elif "nbtc" in email_lower:
+        return "nbtc"
     
     return "unknown"
 
@@ -168,7 +170,7 @@ def check_inbox_and_save_reply():
                 if not request_id:
                     continue
 
-                # Get all senders for this request_id
+                # Get all senders for this request_id, regardless of provider
                 all_senders = list(sender_names.find({
                     "request_ids.id": request_id,
                     "request_ids.status": {"$in": ["pending", "suspension_requested"]}
@@ -195,19 +197,6 @@ def check_inbox_and_save_reply():
                     reply_provider = get_provider_from_email(msg["From"])
                     print(f"Email from {msg['From']} detected as provider: {reply_provider}")
                     
-                    # Filter senders to only those from the same provider
-                    provider_senders = [
-                        sender for sender in all_senders 
-                        if sender.get("mobile_provider", "").lower() == reply_provider.lower() or 
-                        (reply_provider == "unknown" and not sender.get("mobile_provider"))
-                    ]
-                    
-                    if not provider_senders:
-                        print(f"No senders found for provider {reply_provider} in request_id: {request_id}")
-                        continue
-                    
-                    print(f"Processing {len(provider_senders)} senders for provider {reply_provider}")
-                    
                     for part in msg.walk():
                         if part.get_content_maintype() == 'multipart' or part.get('Content-Disposition') is None:
                             continue
@@ -216,15 +205,15 @@ def check_inbox_and_save_reply():
                             file_data = part.get_payload(decode=True)
                             reply_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply", provider=reply_provider)
                             
-                            # Only check against senders from the same provider
-                            matched_senders = check_response_contains_senders(file_data, provider_senders, filename)
+                            # Check response against all senders for this request_id
+                            matched_senders = check_response_contains_senders(file_data, all_senders, filename)
                             print(f"Found {len(matched_senders)} matched senders for {filename} from provider {reply_provider}")
                             
                             existing_notifications = {
                                 (n["sender_name"], n["status"]): n
                                 for n in notifications.find({
                                     "request_id": request_id,
-                                    "sender_name": {"$in": [s["sender_name"] for s in provider_senders]},
+                                    "sender_name": {"$in": [s["sender_name"] for s in all_senders]},
                                     "status": {"$in": ["received", "error"]}
                                 })
                             }
@@ -232,10 +221,10 @@ def check_inbox_and_save_reply():
                             bulk_updates = []
                             any_valid = False
                             
-                            # **แก้ไขส่วนนี้ - ประมวลผลเฉพาะ senders ที่พบในไฟล์เท่านั้น**
+                            # Process matched senders
                             matched_sender_keys = {(s["sender_name"], s["phone_number"]) for s in matched_senders}
                             
-                            for doc in provider_senders:
+                            for doc in all_senders:
                                 sender_name = doc["sender_name"]
                                 phone_number = doc["phone_number"]
                                 user_id = doc["created_by"]
@@ -251,7 +240,6 @@ def check_inbox_and_save_reply():
                                 if is_valid:
                                     any_valid = True
                                     print(f"Updating {sender_name} to 'received' status")
-                                    # อัปเดตเป็น received เฉพาะ sender ที่พบในไฟล์
                                     update_data, new_status = update_sender_status(doc, request_id, True, reply_id)
                                     
                                     bulk_updates.append(
@@ -261,7 +249,7 @@ def check_inbox_and_save_reply():
                                         )
                                     )
 
-                                    # บันทึกข้อมูลใน response_from_telco
+                                    # Save data in response_from_telco
                                     for sender in matched_senders:
                                         if sender["sender_name"] == sender_name and sender["phone_number"] == phone_number:
                                             response_from_telco.insert_one({
@@ -277,7 +265,7 @@ def check_inbox_and_save_reply():
                                             })
                                             break
                                     
-                                    # สร้าง notification เฉพาะเมื่อมีการเปลี่ยนแปลงสถานะ
+                                    # Create notification for status change
                                     if new_status:
                                         notifications.insert_one({
                                             "request_id": request_id,
@@ -290,9 +278,29 @@ def check_inbox_and_save_reply():
                                             "created_at": datetime.datetime.now()
                                         })
                                 else:
-                                    # **ไม่ทำอะไรกับ sender ที่ไม่พบในไฟล์**
-                                    # เหตุผล: อาจเป็น sender ของ provider อื่น ที่ยังรอการตอบกลับ
-                                    print(f"Sender {sender_name} not found in {reply_provider} response - keeping current status")
+                                    # Mark as error if sender not found in response
+                                    print(f"Updating {sender_name} to 'error' status due to missing data in response")
+                                    update_data, new_status = update_sender_status(doc, request_id, False, None)
+                                    
+                                    bulk_updates.append(
+                                        UpdateOne(
+                                            {"sender_name": sender_name, "phone_number": phone_number, "request_ids.id": request_id},
+                                            {"$set": update_data}
+                                        )
+                                    )
+
+                                    # Create error notification
+                                    if new_status:
+                                        notifications.insert_one({
+                                            "request_id": request_id,
+                                            "sender_name": sender_name,
+                                            "status": "error",
+                                            "user_id": user_id,
+                                            "provider": reply_provider,
+                                            "is_read": False,
+                                            "thai_date": updated_at.strftime("%d %B %Y"),
+                                            "created_at": datetime.datetime.now()
+                                        })
                             
                             if bulk_updates:
                                 sender_names.bulk_write(bulk_updates)
@@ -305,9 +313,6 @@ def check_inbox_and_save_reply():
                             mail.store(num, '+FLAGS', '\\Seen')
                             break
                             
-            # **เพิ่ม logic สำหรับการตรวจสอบ error cases**
-            # ตรวจสอบ senders ที่ยังเป็น pending นานเกินไป (เช่น 24 ชั่วโมง)
-            # และ mark เป็น error ถ้าไม่ได้รับการตอบกลับ
             check_timeout_senders()
                             
     except Exception as e:
@@ -315,13 +320,12 @@ def check_inbox_and_save_reply():
 
 def check_timeout_senders():
     """
-    ตรวจสอบและ mark senders ที่ pending นานเกินไปเป็น error
+    Check and mark senders that have been pending too long as error
     """
     try:
         sender_names = sender_names_collection()
         notifications = notifications_collection()
         
-        # หาทุก sender ที่ยัง pending และเกิน timeout (24 ชั่วโมง)
         timeout_threshold = datetime.datetime.now() - datetime.timedelta(hours=24)
         
         timeout_senders = list(sender_names.find({
@@ -340,7 +344,6 @@ def check_timeout_senders():
             user_id = doc["created_by"]
             updated_at = datetime.datetime.now()
             
-            # หา request_ids ที่ยัง pending
             pending_requests = [
                 req for req in doc.get("request_ids", [])
                 if req["status"] in ["pending", "suspension_requested"]
@@ -349,7 +352,6 @@ def check_timeout_senders():
             for req in pending_requests:
                 request_id = req["id"]
                 
-                # อัปเดตสถานะเป็น error
                 update_data, new_status = update_sender_status(doc, request_id, False, None)
                 
                 bulk_updates.append(
@@ -359,7 +361,6 @@ def check_timeout_senders():
                     )
                 )
                 
-                # สร้าง notification
                 if new_status:
                     notifications.insert_one({
                         "request_id": request_id,
