@@ -248,16 +248,7 @@ def check_inbox_and_save_reply():
                                             break
                                 
                                 else:
-                                    # Mark as error if sender not found in response
-                                    print(f"Updating {sender_name} to 'error' status due to missing data in response")
-                                    update_data, new_status = update_sender_status(doc, request_id, False, None)
-                                    
-                                    bulk_updates.append(
-                                        UpdateOne(
-                                            {"sender_name": sender_name, "phone_number": phone_number, "request_ids.id": request_id},
-                                            {"$set": update_data}
-                                        )
-                                    )
+                                    print(f"Sender {sender_name} not found in {reply_provider} response - keeping current status")
                             
                             if bulk_updates:
                                 sender_names.bulk_write(bulk_updates)
