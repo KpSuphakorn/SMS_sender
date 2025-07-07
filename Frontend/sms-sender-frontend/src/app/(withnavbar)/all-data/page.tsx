@@ -443,7 +443,7 @@ export default function AllDataPage() {
       {/* Title and Filter Section - Fixed */}
       <div className="w-full max-w-6xl flex flex-col gap-4 mb-6 bg-white sticky top-0 z-10 pb-4">
         <div className="flex justify-between items-center">
-          <h1 className="text-4xl font-extrabold underline decoration-blue-500">
+          <h1 className="text-4xl font-extrabold decoration-blue-500">
             ข้อมูลทั้งหมด
           </h1>
           <button 
@@ -462,7 +462,7 @@ export default function AllDataPage() {
             onClick={handleUnsentToggle}
             className={`px-4 py-2 rounded-lg font-semibold border transition-all duration-200 ${
               showUnsentOnly 
-                ? 'bg-red-600 text-white border-red-700 shadow-md' 
+                ? 'bg-red-600 text-white border-red-700 shadow-md gra'
                 : 'bg-white text-red-700 border-red-300 hover:bg-red-50'
             }`}
           >
