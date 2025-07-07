@@ -9,7 +9,6 @@ from email import encoders
 from dotenv import load_dotenv
 from app.models.database import grid_fs
 from app.models.sender_names import sender_names_collection
-from app.models.notification import notifications_collection
 from app.models.response_from_telco import response_from_telco_collection
 import datetime
 import pandas as pd
@@ -24,6 +23,15 @@ SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
 SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT"))
 IMAP_SERVER = os.getenv("IMAP_SERVER")
+
+# Provider email mapping
+PROVIDER_EMAILS = {
+    "ais": os.getenv("PROVIDER_EMAIL_AIS"),
+    "dtac": os.getenv("PROVIDER_EMAIL_DTAC"),
+    "true": os.getenv("PROVIDER_EMAIL_TRUE"),
+    "nt": os.getenv("PROVIDER_EMAIL_NT"),
+    "nbtc": os.getenv("PROVIDER_EMAIL_NBTC")
+}
 
 @contextmanager
 def imap_connection():
@@ -48,7 +56,7 @@ def smtp_connection():
 def send_email(subject, body, file_ids):
     msg = MIMEMultipart()
     msg['From'] = SENDER_EMAIL
-    msg['To'] = os.getenv("RECIPIENT_EMAIL")
+    msg['To'] = PROVIDER_EMAILS["nbtc"]  # Always send to NBTC
     msg['Subject'] = subject
     msg.attach(MIMEText(body, 'plain', 'utf-8'))
 
@@ -63,23 +71,18 @@ def send_email(subject, body, file_ids):
 
     with smtp_connection() as server:
         server.send_message(msg)
-        print(f"Email sent with subject: {subject}")
+        print(f"Email sent with subject: {subject} to {msg['To']}")
 
 def is_status_object(status):
     return all(isinstance(s, dict) and "name" in s for s in status) if status else False
 
-def has_final_status(doc, request_id, existing_notifications):
-    sender_name = doc["sender_name"]
+def has_final_status(doc, request_id):
     status = doc.get("status", [])
     if is_status_object(status):
         status_names = [s["name"] for s in status]
     else:
         status_names = status
-    return (
-        "received" in status_names or
-        (sender_name, "received") in existing_notifications or
-        (sender_name, "error") in existing_notifications
-    )
+    return "received" in status_names or "error" in status_names
 
 def update_sender_status(doc, request_id, is_valid, reply_id):
     updated_at = datetime.datetime.now()
@@ -111,11 +114,38 @@ def update_sender_status(doc, request_id, is_valid, reply_id):
         "updated_at": updated_at
     }, new_status_name if new_status else None
 
+def get_provider_from_email(email_address):
+    """
+    Determine which provider sent the email based on email address
+    """
+    if not email_address:
+        return "unknown"
+    
+    email_lower = email_address.lower()
+    
+    # Check against each provider email
+    for provider, provider_email in PROVIDER_EMAILS.items():
+        if provider_email and provider_email.lower() in email_lower:
+            return provider
+    
+    # If no exact match, try to detect from domain or common patterns
+    if "ais" in email_lower:
+        return "ais"
+    elif "dtac" in email_lower:
+        return "dtac"
+    elif "true" in email_lower:
+        return "true"
+    elif "nt" in email_lower or "tot" in email_lower:
+        return "nt"
+    elif "nbtc" in email_lower:
+        return "nbtc"
+    
+    return "unknown"
+
 def check_inbox_and_save_reply():
     try:
         with imap_connection() as mail:
             sender_names = sender_names_collection()
-            notifications = notifications_collection()
             response_from_telco = response_from_telco_collection()
 
             request_ids = set()
@@ -133,11 +163,13 @@ def check_inbox_and_save_reply():
                 if not request_id:
                     continue
 
-                senders = list(sender_names.find({
+                # Get all senders for this request_id, regardless of provider
+                all_senders = list(sender_names.find({
                     "request_ids.id": request_id,
                     "request_ids.status": {"$in": ["pending", "suspension_requested"]}
                 }))
-                if not senders:
+                
+                if not all_senders:
                     print(f"No senders found for request_id: {request_id}")
                     continue
 
@@ -149,88 +181,138 @@ def check_inbox_and_save_reply():
                 for num in data[0].split():
                     _, msg_data = mail.fetch(num, "(RFC822)")
                     msg = email.message_from_bytes(msg_data[0][1])
-                    if msg["From"] and SENDER_EMAIL.lower() not in msg["From"].lower():
-                        for part in msg.walk():
-                            if part.get_content_maintype() == 'multipart' or part.get('Content-Disposition') is None:
-                                continue
-                            filename = part.get_filename()
-                            if filename and filename.lower().endswith((".csv", ".xlsx")):
-                                file_data = part.get_payload(decode=True)
-                                reply_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply")
+                    
+                    # Skip if it's our own email
+                    if msg["From"] and SENDER_EMAIL.lower() in msg["From"].lower():
+                        continue
+                    
+                    # Determine which provider sent this email
+                    reply_provider = get_provider_from_email(msg["From"])
+                    print(f"Email from {msg['From']} detected as provider: {reply_provider}")
+                    
+                    for part in msg.walk():
+                        if part.get_content_maintype() == 'multipart' or part.get('Content-Disposition') is None:
+                            continue
+                        filename = part.get_filename()
+                        if filename and filename.lower().endswith((".csv", ".xlsx")):
+                            file_data = part.get_payload(decode=True)
+                            reply_id = grid_fs.put(file_data, filename=filename, request_id=request_id, file_type="reply", provider=reply_provider)
+                            
+                            # Check response against all senders for this request_id
+                            matched_senders = check_response_contains_senders(file_data, all_senders, filename)
+                            print(f"Found {len(matched_senders)} matched senders for {filename} from provider {reply_provider}")
+                            
+                            bulk_updates = []
+                            any_valid = False
+                            
+                            # Process matched senders
+                            matched_sender_keys = {s["sender_name"] for s in matched_senders}
+                            
+                            for doc in all_senders:
+                                sender_name = doc["sender_name"]
+                                phone_number = doc["phone_number"]
+                                updated_at = datetime.datetime.now()
                                 
-                                matched_senders = check_response_contains_senders(file_data, senders, filename)
-                                print(f"Found {len(matched_senders)} matched senders for {filename}")
+                                if has_final_status(doc, request_id):
+                                    print(f"Skipping update for {sender_name}: already has final status")
+                                    continue
                                 
-                                existing_notifications = {
-                                    (n["sender_name"], n["status"]): n
-                                    for n in notifications.find({
-                                        "request_id": request_id,
-                                        "sender_name": {"$in": [s["sender_name"] for s in senders]},
-                                        "status": {"$in": ["received", "error"]}
-                                    })
-                                }
-
-                                bulk_updates = []
-                                any_valid = False
-                                for doc in senders:
-                                    sender_name = doc["sender_name"]
-                                    user_id = doc["created_by"]
-                                    updated_at = datetime.datetime.now()
-                                    
-                                    if has_final_status(doc, request_id, existing_notifications):
-                                        print(f"Skipping update for {sender_name}: already has final status")
-                                        continue
-                                    
-                                    is_valid = any(s["sender_name"] == sender_name for s in matched_senders)
-                                    if is_valid:
-                                        any_valid = True
-                                    
-                                    update_data, new_status = update_sender_status(doc, request_id, is_valid, reply_id)
+                                is_valid = sender_name in matched_sender_keys
+                                
+                                if is_valid:
+                                    any_valid = True
+                                    print(f"Updating {sender_name} to 'received' status")
+                                    update_data, new_status = update_sender_status(doc, request_id, True, reply_id)
                                     
                                     bulk_updates.append(
                                         UpdateOne(
-                                            {"sender_name": sender_name, "phone_number": doc["phone_number"], "request_ids.id": request_id},
+                                            {"sender_name": sender_name, "phone_number": phone_number, "request_ids.id": request_id},
                                             {"$set": update_data}
                                         )
                                     )
 
-                                    if is_valid:
-                                        for sender in matched_senders:
-                                            if sender["sender_name"] == sender_name:
-                                                response_from_telco.insert_one({
-                                                    "sender_name": sender["sender_name"],
-                                                    "phone_number": sender["phone_number"],
-                                                    "request_id": request_id,
-                                                    "reply_file_id": reply_id,
-                                                    "status": [{"name": "received", "updated_at": updated_at}],
-                                                    "data": sender.get("data", {}),
-                                                    "created_at": datetime.datetime.now(),
-                                                    "updated_at": updated_at
-                                                })
-                                    
-                                    if new_status:
-                                        notifications.insert_one({
-                                            "request_id": request_id,
-                                            "sender_name": sender_name,
-                                            "status": new_status,
-                                            "user_id": user_id,
-                                            "is_read": False,
-                                            "thai_date": updated_at.strftime("%d %B %Y"),
-                                            "created_at": datetime.datetime.now()
-                                        })
+                                    # Save data in response_from_telco
+                                    for sender in matched_senders:
+                                        if sender["sender_name"] == sender_name:
+                                            response_from_telco.insert_one({
+                                                "sender_name": sender["sender_name"],
+                                                "phone_number": sender["phone_number"],
+                                                "request_id": request_id,
+                                                "reply_file_id": reply_id,
+                                                "provider": reply_provider,
+                                                "status": [{"name": "received", "updated_at": updated_at}],
+                                                "data": sender.get("data", {}),
+                                                "created_at": datetime.datetime.now(),
+                                                "updated_at": updated_at
+                                            })
+                                            break
                                 
-                                if bulk_updates:
-                                    sender_names.bulk_write(bulk_updates)
-                                    print(f"Updated {len(bulk_updates)} senders")
-                                
-                                if not any_valid:
-                                    grid_fs.delete(reply_id)
-                                    print(f"Deleted unused file {filename}")
-                                
-                                mail.store(num, '+FLAGS', '\\Seen')
-                                break
+                                else:
+                                    print(f"Sender {sender_name} not found in {reply_provider} response - keeping current status")
+                            
+                            if bulk_updates:
+                                sender_names.bulk_write(bulk_updates)
+                                print(f"Updated {len(bulk_updates)} senders for provider {reply_provider}")
+                            
+                            if not any_valid:
+                                grid_fs.delete(reply_id)
+                                print(f"Deleted unused file {filename} from provider {reply_provider}")
+                            
+                            mail.store(num, '+FLAGS', '\\Seen')
+                            break
+                            
+            check_timeout_senders()
+                            
     except Exception as e:
         print(f"Error checking inbox: {str(e)}")
+
+def check_timeout_senders():
+    """
+    Check and mark senders that have been pending too long as error
+    """
+    try:
+        sender_names = sender_names_collection()
+        
+        timeout_threshold = datetime.datetime.now() - datetime.timedelta(hours=24)
+        
+        timeout_senders = list(sender_names.find({
+            "request_ids": {
+                "$elemMatch": {
+                    "status": {"$in": ["pending", "suspension_requested"]}
+                }
+            },
+            "updated_at": {"$lt": timeout_threshold}
+        }))
+        
+        bulk_updates = []
+        
+        for doc in timeout_senders:
+            sender_name = doc["sender_name"]
+            updated_at = datetime.datetime.now()
+            
+            pending_requests = [
+                req for req in doc.get("request_ids", [])
+                if req["status"] in ["pending", "suspension_requested"]
+            ]
+            
+            for req in pending_requests:
+                request_id = req["id"]
+                
+                update_data, new_status = update_sender_status(doc, request_id, False, None)
+                
+                bulk_updates.append(
+                    UpdateOne(
+                        {"sender_name": sender_name, "phone_number": doc["phone_number"], "request_ids.id": request_id},
+                        {"$set": update_data}
+                    )
+                )
+        
+        if bulk_updates:
+            sender_names.bulk_write(bulk_updates)
+            print(f"Marked {len(bulk_updates)} timeout senders as error")
+            
+    except Exception as e:
+        print(f"Error checking timeout senders: {str(e)}")
 
 def check_response_contains_senders(file_data, senders, filename):
     try:
@@ -243,20 +325,16 @@ def check_response_contains_senders(file_data, senders, filename):
         df.columns = df.columns.str.strip().str.lower().str.replace(' ', '_').str.replace(r'[^\w]', '', regex=True)
         
         sender_col = next((col for col in df.columns if any(k in col.lower() for k in ["sender", "sendername", "name"])), None)
-        phone_col = next((col for col in df.columns if any(k in col.lower() for k in ["phone", "phonenumber", "number", "mobile"])), None)
-        
-        if not sender_col or not phone_col:
-            print(f"No sender_name or phone_number column found in {filename}")
+        if not sender_col:
+            print(f"No sender_name column found in {filename}")
             return []
 
         df[sender_col] = df[sender_col].astype(str).str.strip().str.lower()
-        df[phone_col] = df[phone_col].astype(str).str.replace(r'\D', '', regex=True).str.lstrip('0')
         
         matched_senders = []
         for doc in senders:
             sender_name_clean = doc["sender_name"].strip().lower()
-            phone_number_clean = ''.join(filter(str.isdigit, str(doc["phone_number"]))).lstrip('0')
-            match = df[(df[sender_col] == sender_name_clean) & (df[phone_col] == phone_number_clean)]
+            match = df[df[sender_col] == sender_name_clean]
             if not match.empty:
                 matched_data = match.to_dict('records')[0]
                 matched_senders.append({
