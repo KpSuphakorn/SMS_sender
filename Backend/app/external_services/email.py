@@ -28,7 +28,6 @@ SMTP_SERVER = os.getenv("SMTP_SERVER")
 SMTP_PORT = int(os.getenv("SMTP_PORT"))
 IMAP_SERVER = os.getenv("IMAP_SERVER")
 
-# Provider email mapping
 PROVIDER_EMAILS = {
     "ais": os.getenv("PROVIDER_EMAIL_AIS"),
     "dtac": os.getenv("PROVIDER_EMAIL_DTAC"),
@@ -75,7 +74,7 @@ def send_email(subject, body, file_ids):
 
     with smtp_connection() as server:
         server.send_message(msg)
-        print(f"Email sent with subject: {subject} to {msg['To']}")
+        print(f"Email sent - Subject: {subject}")
 
 def is_status_object(status):
     return all(isinstance(s, dict) and "name" in s for s in status) if status else False
@@ -159,22 +158,24 @@ def check_response_contains_senders(file_data, senders, filename):
             "หมายเลขที่แสดงsender"
         ]
         sender_col = next((col for col in df.columns if any(k in col.lower() for k in possible_columns)), None)
+        
         if not sender_col:
-            print(f"No sender_name column found in {filename}")
+            print(f"No sender column found in {filename}")
             return []
 
         df[sender_col] = df[sender_col].astype(str).str.strip().str.replace("_x000D_", "").str.replace(r'\s+', '', regex=True).str.replace(r'[^\w\d]', '', regex=True).str.lower()
         
-        # Convert datetime.time to string in DataFrame
         for col in df.columns:
             df[col] = df[col].apply(lambda x: x.strftime('%H:%M:%S') if isinstance(x, time) else x)
         
         matched_senders = []
+        
         for doc in senders:
             sender_name_clean = doc["sender_name"].strip()
             sender_name_clean = sender_name_clean.replace("_x000D_", "")
             sender_name_clean = re.sub(r'\s+', '', sender_name_clean)
             sender_name_clean = re.sub(r'[^\w\d]', '', sender_name_clean).lower()
+            
             match = df[df[sender_col] == sender_name_clean]
             if not match.empty:
                 matched_data = match.to_dict('records')[0]
@@ -184,14 +185,17 @@ def check_response_contains_senders(file_data, senders, filename):
                     "data": matched_data
                 })
         
-        print(f"Matched {len(matched_senders)} senders in {filename}")
+        print(f"File {filename}: {len(matched_senders)}/{len(senders)} matched")
         return matched_senders
+        
     except Exception as e:
         print(f"Error processing file {filename}: {str(e)}")
         return []
 
 def check_inbox_and_save_reply():
     try:
+        print("=== Starting inbox check ===")
+        
         with imap_connection() as mail:
             sender_names = sender_names_collection()
             response_from_telco = response_from_telco_collection()
@@ -205,7 +209,7 @@ def check_inbox_and_save_reply():
                     req["id"] for req in doc.get("request_ids", []) if req["status"] in ["pending", "suspension_requested"]
                 )
 
-            print(f"Checking inbox for {len(request_ids)} request IDs")
+            print(f"Found {len(request_ids)} pending requests")
 
             for request_id in request_ids:
                 if not request_id:
@@ -217,16 +221,16 @@ def check_inbox_and_save_reply():
                 }))
                 
                 if not all_senders:
-                    print(f"No senders found for request_id: {request_id}")
                     continue
 
                 result, data = mail.search(None, f'(SUBJECT "{request_id}")')
                 if result != 'OK':
-                    print(f"No emails found for request_id: {request_id}")
                     continue
 
                 email_nums = data[0].split() if data[0] else []
-                print(f"Found {len(email_nums)} emails for request_id {request_id}")
+                
+                if email_nums:
+                    print(f"Processing {len(email_nums)} emails for {request_id}")
 
                 for num in email_nums:
                     _, msg_data = mail.fetch(num, "(RFC822)")
@@ -236,10 +240,8 @@ def check_inbox_and_save_reply():
                         continue
                     
                     reply_provider = get_provider_from_email(msg["From"])
-                    print(f"Processing email from {reply_provider}")
                     
-                    has_attachments = False
-                    attachment_count = 0
+                    has_valid_attachments = False
                     
                     for part in msg.walk():
                         if part.get_content_maintype() == 'multipart':
@@ -256,37 +258,30 @@ def check_inbox_and_save_reply():
                                 if isinstance(decoded_filename, bytes):
                                     decoded_filename = decoded_filename.decode('utf-8', errors='ignore')
                             except Exception as e:
-                                print(f"Error decoding filename: {str(e)}")
                                 decoded_filename = filename
                             
-                            attachment_count += 1
                             if decoded_filename.lower().endswith((".csv", ".xlsx")) or filename.lower().endswith((".csv", ".xlsx")):
-                                has_attachments = True
-                                file_data = part.get_payload(decode=True)
+                                has_valid_attachments = True
                                 
+                                file_data = part.get_payload(decode=True)
                                 reply_id = grid_fs.put(file_data, filename=decoded_filename, request_id=request_id, file_type="reply", provider=reply_provider)
-                                print(f"Saved file {decoded_filename} to GridFS with ID: {reply_id}")
                                 
                                 matched_senders = check_response_contains_senders(file_data, all_senders, decoded_filename)
                                 
                                 bulk_updates = []
                                 any_valid = False
-                                valid_count = 0
-                                not_found_count = 0
                                 
                                 matched_sender_keys = {s["sender_name"] for s in matched_senders}
                                 
                                 for doc in all_senders:
-                                    sender_name = doc["sender_name"]
-                                    phone_number = doc["phone_number"]
-                                    updated_at = datetime.datetime.now()
-                                    
                                     if has_final_status(doc, request_id):
                                         continue
                                     
+                                    sender_name = doc["sender_name"]
+                                    phone_number = doc["phone_number"]
                                     is_valid = sender_name in matched_sender_keys
+                                    
                                     if is_valid:
-                                        valid_count += 1
                                         any_valid = True
                                         update_data, new_status = update_sender_status(doc, request_id, True, reply_id)
                                         
@@ -305,42 +300,35 @@ def check_inbox_and_save_reply():
                                                     "request_id": request_id,
                                                     "reply_file_id": reply_id,
                                                     "provider": reply_provider,
-                                                    "status": [{"name": "received", "updated_at": updated_at}],
+                                                    "status": [{"name": "received", "updated_at": datetime.datetime.now()}],
                                                     "data": sender.get("data", {}),
                                                     "created_at": datetime.datetime.now(),
-                                                    "updated_at": updated_at
+                                                    "updated_at": datetime.datetime.now()
                                                 })
                                                 break
-                                    else:
-                                        not_found_count += 1
-                                
-                                print(f"Processed {len(all_senders)} senders for {decoded_filename}: {valid_count} valid, {not_found_count} not found")
                                 
                                 if bulk_updates:
-                                    result = sender_names.bulk_write(bulk_updates)
-                                    print(f"Updated {len(bulk_updates)} senders for provider {reply_provider}")
+                                    sender_names.bulk_write(bulk_updates)
+                                    print(f"Updated {len(bulk_updates)} senders for {reply_provider}")
                                 
                                 if not any_valid:
                                     grid_fs.delete(reply_id)
-                                    print(f"Deleted unused file {decoded_filename} from provider {reply_provider}")
                                 
                                 mail.store(num, '+FLAGS', '\\Seen')
-                                print(f"Marked email {num} as read")
                                 break
-                            
-                    print(f"Total attachments found: {attachment_count}, Valid attachments: {has_attachments}")
-                    if not has_attachments:
-                        print(f"No valid CSV/XLSX attachments in email for request_id: {request_id}")
-                            
+            
+            print("=== Inbox check completed ===")
             check_timeout_senders()
                             
     except Exception as e:
-        print(f"Error checking inbox: {str(e)}")
+        print(f"Error in inbox check: {str(e)}")
         import traceback
         traceback.print_exc()
 
 def check_timeout_senders():
     try:
+        print("=== Checking timeout senders ===")
+        
         sender_names = sender_names_collection()
         timeout_threshold = datetime.datetime.now() - datetime.timedelta(hours=24)
         
@@ -353,11 +341,15 @@ def check_timeout_senders():
             "updated_at": {"$lt": timeout_threshold}
         }))
         
+        if not timeout_senders:
+            print("No timeout senders found")
+            return
+        
         bulk_updates = []
+        timeout_count = 0
         
         for doc in timeout_senders:
             sender_name = doc["sender_name"]
-            updated_at = datetime.datetime.now()
             
             pending_requests = [
                 req for req in doc.get("request_ids", [])
@@ -374,9 +366,11 @@ def check_timeout_senders():
                         {"$set": update_data}
                     )
                 )
+                timeout_count += 1
         
         if bulk_updates:
-            print(f"Marked {len(bulk_updates)} timeout senders as error")
+            sender_names.bulk_write(bulk_updates)
+            print(f"Marked {timeout_count} timeout senders as error")
             
     except Exception as e:
         print(f"Error checking timeout senders: {str(e)}")
