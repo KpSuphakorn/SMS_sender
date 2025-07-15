@@ -1,5 +1,5 @@
 "use client";
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, memo } from "react";
 import { useSession } from "next-auth/react";
 import getAvailableSenders from "@/libs/getAvailableSenders";
 import { DatePicker } from "../../../libs/DatePicker";
@@ -133,6 +133,86 @@ interface CaseData {
   full_name?: string;
 }
 
+// Memoized CaseCard component for better performance
+const CaseCard = memo(({ 
+  caseItem, 
+  isSelected, 
+  onSelection, 
+  onCaseClick 
+}: {
+  caseItem: CaseData;
+  isSelected: boolean;
+  onSelection: (id: string, selected: boolean) => void;
+  onCaseClick: (caseItem: CaseData) => void;
+}) => (
+  <div
+    className={`bg-white rounded-xl shadow-md border p-6 transition-all duration-200 ${
+      isSelected
+        ? 'border-blue-500 bg-blue-50 shadow-lg'
+        : 'border-gray-200 hover:shadow-lg hover:border-blue-300'
+    }`}
+  >
+    <div className="flex flex-row items-center gap-6">
+      {/* Selection Checkbox */}
+      <label className="flex items-center cursor-pointer">
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={(e) => onSelection(caseItem.id, e.target.checked)}
+          className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </label>
+
+      <div 
+        className="flex-1 flex flex-row items-center gap-6 cursor-pointer"
+        onClick={() => onCaseClick(caseItem)}
+      >
+        <div className="text-lg font-bold text-blue-600 min-w-28">
+          {new Date(caseItem.date).toLocaleDateString('th-TH')}
+        </div>
+        
+        <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <div className="font-semibold text-gray-800">{caseItem.sender}</div>
+            <div className="text-gray-500 text-sm">{caseItem.telco}</div>
+          </div>
+          <div>
+            <div className="font-semibold text-gray-800">Actual Telco</div>
+            <div className="text-gray-500 text-sm">{caseItem.actualTelco}</div>
+          </div>
+        </div>
+        
+        {/* Status Bar */}
+        <div className="flex-1 flex flex-row items-center gap-2 min-w-96">
+          {caseItem.statuses.map((status, i) => (
+            <div key={i} className="flex flex-col items-center flex-1">
+              <div
+                className={`h-2 w-full rounded-full mb-1 transition-colors ${
+                  status.done ? "bg-green-500" : "bg-gray-300"
+                }`}
+              />
+              <span
+                className={`text-xs font-medium text-center ${
+                  status.done ? "text-green-700" : "text-gray-500"
+                }`}
+              > 
+                {status.label}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+    
+    <div className="text-right text-gray-400 text-xs mt-3">
+      Case ID: {caseItem.id}
+    </div>
+  </div>
+));
+
+CaseCard.displayName = 'CaseCard';
+
 export default function AllDataPage() {
   const { data: session } = useSession();
   const [dateRange, setDateRange] = useState<DatesRangeValue>([null, null]);
@@ -145,12 +225,26 @@ export default function AllDataPage() {
   const [showUnsentOnly, setShowUnsentOnly] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState<string>('');
+  const [debouncedSearchTerm, setDebouncedSearchTerm] = useState<string>('');
   
   // New state for case selection and submission
   const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage] = useState(50); // Show 50 items per page for better performance
+
+  // Debounce search term to improve performance
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchTerm(searchTerm);
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
 
   // Memoized filtered cases based on date range and unsent filter
   const filteredCases = useMemo(() => {
@@ -170,24 +264,42 @@ export default function AllDataPage() {
       );
     }
     
-    if (searchTerm) { 
-        cases= searchData(cases, searchTerm); 
+    if (debouncedSearchTerm) { 
+        cases = searchData(cases, debouncedSearchTerm); 
     }
 
     return cases;
-  }, [allCases, dateRange, showUnsentOnly, searchTerm]);
+  }, [allCases, dateRange, showUnsentOnly, debouncedSearchTerm]);
 
-  // Get currently visible case IDs
-  const visibleCaseIds = useMemo(() => 
+  // Paginated cases for rendering
+  const paginatedCases = useMemo(() => {
+    const startIndex = (currentPage - 1) * itemsPerPage;
+    const endIndex = startIndex + itemsPerPage;
+    return filteredCases.slice(startIndex, endIndex);
+  }, [filteredCases, currentPage, itemsPerPage]);
+
+  // Total pages calculation
+  const totalPages = useMemo(() => 
+    Math.ceil(filteredCases.length / itemsPerPage), 
+    [filteredCases.length, itemsPerPage]
+  );
+
+  // Get all filtered case IDs (across all pages)
+  const allFilteredCaseIds = useMemo(() => 
     filteredCases.map(c => c.id), 
     [filteredCases]
   );
 
-  // Check if all visible cases are selected
-  const isAllVisibleSelected = useMemo(() => 
-    visibleCaseIds.length > 0 && visibleCaseIds.every(id => selectedCases.has(id)), 
-    [visibleCaseIds, selectedCases]
+  // Check if all filtered cases are selected (across all pages)
+  const isAllFilteredSelected = useMemo(() => 
+    allFilteredCaseIds.length > 0 && allFilteredCaseIds.every(id => selectedCases.has(id)), 
+    [allFilteredCaseIds, selectedCases]
   );
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [dateRange, showUnsentOnly, debouncedSearchTerm]);
 
   // Fetch all data from API (only once on component mount)
   const fetchAllData = useCallback(async () => {
@@ -286,19 +398,19 @@ export default function AllDataPage() {
   // Handle select all toggle
   const handleSelectAllToggle = useCallback(() => {
     setSelectedCases(prev => {
-      if (isAllVisibleSelected) {
-        // Deselect all visible cases
+      if (isAllFilteredSelected) {
+        // Deselect all filtered cases (across all pages)
         const newSet = new Set(prev);
-        visibleCaseIds.forEach(id => newSet.delete(id));
+        allFilteredCaseIds.forEach(id => newSet.delete(id));
         return newSet;
       } else {
-        // Select all visible cases
+        // Select all filtered cases (across all pages)
         const newSet = new Set(prev);
-        visibleCaseIds.forEach(id => newSet.add(id));
+        allFilteredCaseIds.forEach(id => newSet.add(id));
         return newSet;
       }
     });
-  }, [isAllVisibleSelected, visibleCaseIds]);
+  }, [isAllFilteredSelected, allFilteredCaseIds]);
 
   // Handle submit selected cases
   const handleSubmit = useCallback(async () => {
@@ -368,7 +480,25 @@ export default function AllDataPage() {
   // Clear selection when filters change
   useEffect(() => {
     setSelectedCases(new Set());
-  }, [dateRange, showUnsentOnly, searchTerm]);
+  }, [dateRange, showUnsentOnly, debouncedSearchTerm]);
+
+  // Pagination handlers
+  const handlePageChange = useCallback((page: number) => {
+    setCurrentPage(page);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  const handlePreviousPage = useCallback(() => {
+    if (currentPage > 1) {
+      handlePageChange(currentPage - 1);
+    }
+  }, [currentPage, handlePageChange]);
+
+  const handleNextPage = useCallback(() => {
+    if (currentPage < totalPages) {
+      handlePageChange(currentPage + 1);
+    }
+  }, [currentPage, totalPages, handlePageChange]);
 
   // Export to Excel
   const handleExportToExcel = useCallback(() => {
@@ -552,13 +682,20 @@ export default function AllDataPage() {
           </div>
         </div>
         {/* Search Input */}
+        <div className="relative">
           <FloatingLabelInput
-          label="ค้นหาข้อมูล"
-          value={searchTerm}
-          onChange={(event) => setSearchTerm(event.currentTarget.value)}
-          size="xs"
-          radius="xl"
-        />
+            label="ค้นหาข้อมูล"
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.currentTarget.value)}
+            size="xs"
+            radius="xl"
+          />
+          {searchTerm !== debouncedSearchTerm && (
+            <div className="absolute right-3 top-1/2 transform -translate-y-1/2">
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-500"></div>
+            </div>
+          )}
+        </div>
         {/* Selection and Submit Section */}
         {filteredCases.length > 0 && (
           <div className="flex flex-row items-center gap-4 bg-gray-50 rounded-xl px-4 py-3 w-full">
@@ -567,13 +704,15 @@ export default function AllDataPage() {
               <button
                 onClick={handleSelectAllToggle}
                 className={`flex items-center space-x-3 px-6 py-3 rounded-xl font-semibold transition-all duration-200 ${
-                  isAllVisibleSelected
+                  isAllFilteredSelected
                     ? 'bg-gradient-to-r from-red-100 to-red-200 text-red-700 hover:from-red-200 hover:to-red-300' 
                     : 'bg-gradient-to-r from-blue-100 to-indigo-200 text-blue-700 hover:from-blue-200 hover:to-indigo-300'
                 }`}
               >
                 <CheckCircle className="w-5 h-5" />
-                <span className="font-semibold text-gray-700">{ isAllVisibleSelected ? 'ยกเลิกเลือกทั้งหมด' : 'เลือกทั้งหมด'} ({filteredCases.length} เคส)
+                <span className="font-semibold text-gray-700">
+                  {isAllFilteredSelected ? 'ยกเลิกเลือกทั้งหมด' : 'เลือกทั้งหมด'} 
+                  ({filteredCases.length} เคสทั้งหมด)
                 </span>
               </button>
               {/* Selection summary right of Select All */}
@@ -637,7 +776,7 @@ export default function AllDataPage() {
         {/* Results Summary */}
         <div className="flex justify-between items-center text-sm text-gray-600">
           <div>
-            แสดงผล {filteredCases.length} จาก {allCases.length} เคสทั้งหมด
+            แสดงผล {paginatedCases.length} จาก {filteredCases.length} รายการที่กรอง ({allCases.length} รายการทั้งหมด)
             {showUnsentOnly && <span className="text-red-600 font-semibold"> (เฉพาะรายงานที่ยังไม่เคยส่ง)</span>}
           </div>
           {showUnsentOnly && (
@@ -646,11 +785,77 @@ export default function AllDataPage() {
             </div>
           )}
         </div>
+
+        {/* Pagination Info and Controls */}
+        {totalPages > 1 && (
+          <div className="flex justify-between items-center text-sm text-gray-600 bg-gray-50 rounded-lg px-4 py-2">
+            <div>
+              หน้า {currentPage} จาก {totalPages} หน้า | แสดง {((currentPage - 1) * itemsPerPage) + 1}-{Math.min(currentPage * itemsPerPage, filteredCases.length)} จาก {filteredCases.length} รายการ
+            </div>
+            
+            {/* Top Pagination Controls */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handlePreviousPage}
+                disabled={currentPage === 1}
+                className={`px-3 py-1 rounded-lg font-medium transition-colors text-sm ${
+                  currentPage === 1
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-blue-500 text-white hover:bg-blue-600'
+                }`}
+              >
+                ก่อนหน้า
+              </button>
+
+              {/* Compact Page Numbers */}
+              <div className="flex gap-1">
+                {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                  let pageNum;
+                  if (totalPages <= 5) {
+                    pageNum = i + 1;
+                  } else if (currentPage <= 3) {
+                    pageNum = i + 1;
+                  } else if (currentPage >= totalPages - 2) {
+                    pageNum = totalPages - 4 + i;
+                  } else {
+                    pageNum = currentPage - 2 + i;
+                  }
+
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => handlePageChange(pageNum)}
+                      className={`px-2 py-1 rounded-lg font-medium transition-colors text-sm ${
+                        currentPage === pageNum
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-white text-blue-600 border border-blue-300 hover:bg-blue-50'
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <button
+                onClick={handleNextPage}
+                disabled={currentPage === totalPages}
+                className={`px-3 py-1 rounded-lg font-medium transition-colors text-sm ${
+                  currentPage === totalPages
+                    ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                    : 'bg-blue-500 text-white hover:bg-blue-600'
+                }`}
+              >
+                ถัดไป
+              </button>
+            </div>
+          </div>
+        )}
         
       </div>
 
-      {/* Scrollable Cards Section */}
-      <div className="w-full max-w-6xl overflow-y-auto flex-1" style={{ maxHeight: "70vh" }}>
+      {/* Optimized Cards Section with Pagination */}
+      <div className="w-full max-w-6xl flex-1">
         {filteredCases.length === 0 ? (
           <div className="text-center text-gray-500 text-xl py-12">
             {allCases.length === 0 ? 
@@ -661,75 +866,79 @@ export default function AllDataPage() {
             }
           </div>
         ) : (
-          <div className="space-y-4">
-            {filteredCases.map((caseItem) => (
-              <div
-                key={caseItem.id}
-                className={`bg-white rounded-xl shadow-md border p-6 transition-all duration-200 ${
-                  selectedCases.has(caseItem.id)
-                    ? 'border-blue-500 bg-blue-50 shadow-lg'
-                    : 'border-gray-200 hover:shadow-lg hover:border-blue-300'
-                }`}
-              >
-                <div className="flex flex-row items-center gap-6">
-                  {/* Selection Checkbox */}
-                  <label className="flex items-center cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={selectedCases.has(caseItem.id)}
-                      onChange={(e) => handleCaseSelection(caseItem.id, e.target.checked)}
-                      className="w-5 h-5 text-blue-600 rounded focus:ring-blue-500"
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </label>
+          <>
+            {/* Cards Grid */}
+            <div className="space-y-4 mb-6">
+              {paginatedCases.map((caseItem) => (
+                <CaseCard
+                  key={caseItem.id}
+                  caseItem={caseItem}
+                  isSelected={selectedCases.has(caseItem.id)}
+                  onSelection={handleCaseSelection}
+                  onCaseClick={handleCaseClick}
+                />
+              ))}
+            </div>
 
-                  <div 
-                    className="flex-1 flex flex-row items-center gap-6 cursor-pointer"
-                    onClick={() => handleCaseClick(caseItem)}
-                  >
-                    <div className="text-lg font-bold text-blue-600 min-w-28">
-                      {new Date(caseItem.date).toLocaleDateString('th-TH')}
-                    </div>
-                    
-                    <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <div className="font-semibold text-gray-800">{caseItem.sender}</div>
-                        <div className="text-gray-500 text-sm">{caseItem.telco}</div>
-                      </div>
-                      <div>
-                        <div className="font-semibold text-gray-800">Actual Telco</div>
-                        <div className="text-gray-500 text-sm">{caseItem.actualTelco}</div>
-                      </div>
-                    </div>
-                    
-                    {/* Status Bar */}
-                    <div className="flex-1 flex flex-row items-center gap-2 min-w-96">
-                      {caseItem.statuses.map((status, i) => (
-                        <div key={i} className="flex flex-col items-center flex-1">
-                          <div
-                            className={`h-2 w-full rounded-full mb-1 transition-colors ${
-                              status.done ? "bg-green-500" : "bg-gray-300"
-                            }`}
-                          />
-                          <span
-                            className={`text-xs font-medium text-center ${
-                              status.done ? "text-green-700" : "text-gray-500"
-                            }`}
-                          > 
-                            {status.label}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+            {/* Pagination Controls */}
+            {totalPages > 1 && (
+              <div className="flex justify-center items-center gap-4 mt-8 pb-8">
+                <button
+                  onClick={handlePreviousPage}
+                  disabled={currentPage === 1}
+                  className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                    currentPage === 1
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      : 'bg-blue-500 text-white hover:bg-blue-600'
+                  }`}
+                >
+                  ก่อนหน้า
+                </button>
+
+                {/* Page Numbers */}
+                <div className="flex gap-2">
+                  {Array.from({ length: Math.min(10, totalPages) }, (_, i) => {
+                    let pageNum;
+                    if (totalPages <= 10) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 4) {
+                      pageNum = totalPages - 9 + i;
+                    } else {
+                      pageNum = currentPage - 4 + i;
+                    }
+
+                    return (
+                      <button
+                        key={pageNum}
+                        onClick={() => handlePageChange(pageNum)}
+                        className={`px-3 py-2 rounded-lg font-semibold transition-colors ${
+                          currentPage === pageNum
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-white text-blue-600 border border-blue-300 hover:bg-blue-50'
+                        }`}
+                      >
+                        {pageNum}
+                      </button>
+                    );
+                  })}
                 </div>
-                
-                <div className="text-right text-gray-400 text-xs mt-3">
-                  Case ID: {caseItem.id}
-                </div>
+
+                <button
+                  onClick={handleNextPage}
+                  disabled={currentPage === totalPages}
+                  className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                    currentPage === totalPages
+                      ? 'bg-gray-200 text-gray-400 cursor-not-allowed'
+                      : 'bg-blue-500 text-white hover:bg-blue-600'
+                  }`}
+                >
+                  ถัดไป
+                </button>
               </div>
-            ))}
-          </div>
+            )}
+          </>
         )}
       </div>
 

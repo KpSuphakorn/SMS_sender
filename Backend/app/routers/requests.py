@@ -21,7 +21,7 @@ from app.schemas.request import SenderRequest
 from app.utils.pdf import generate_custom_pdf_and_store, generate_suspension_pdf
 from app.external_services.email import check_inbox_and_save_reply, send_email
 from app.dependencies import get_current_user
-from app.utils.helpers import convert_objectid_to_str, format_sender_doc, is_status_object
+from app.utils.helpers import convert_objectid_to_str, format_sender_doc, is_status_object, clean_nan_values
 from bson.objectid import ObjectId
 import random
 import asyncio
@@ -351,20 +351,22 @@ def get_available_senders_endpoint(start: Optional[str] = Query(None), end: Opti
             raise HTTPException(status_code=400, detail="วันที่สิ้นสุดต้องไม่มากกว่าวันปัจจุบัน")
         query["updated_at"] = {"$lte": end_date}
     
-    return [
+    result = [
         format_sender_doc(doc, include_telco_data=True, response_from_telco=response_from_telco)
         for doc in sender_names.find(query, {"_id": 0})
     ]
+    return clean_nan_values(result)
 
 @router.get("/my-requests")
 def get_my_requests_endpoint(current_user: dict = Depends(get_current_user)):
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
     requests = sender_names.find({"created_by": current_user["id"]}).sort("created_at", -1)
-    return convert_objectid_to_str([
+    result = convert_objectid_to_str([
         format_sender_doc(doc, include_telco_data=True, response_from_telco=response_from_telco, include_pdf_ids=True)
         for doc in requests
     ])
+    return clean_nan_values(result)
 
 @router.get("/file/{file_id}")
 def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
