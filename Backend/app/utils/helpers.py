@@ -1,7 +1,20 @@
 from bson import ObjectId
 from datetime import datetime
+import math
+import json
 from app.models.sender_names import sender_names_collection
 from app.models.response_from_telco import response_from_telco_collection
+
+def clean_nan_values(data):
+    """Clean NaN values from data structure to make it JSON compliant."""
+    if isinstance(data, list):
+        return [clean_nan_values(item) for item in data]
+    elif isinstance(data, dict):
+        return {key: clean_nan_values(value) for key, value in data.items()}
+    elif isinstance(data, float) and (math.isnan(data) or math.isinf(data)):
+        return None  # Replace NaN and Inf with None
+    else:
+        return data
 
 def convert_objectid_to_str(data):
     """Convert ObjectId to string in a data structure."""
@@ -70,4 +83,4 @@ def format_sender_doc(doc, include_telco_data=False, response_from_telco=None, i
                 "pdf_sent_suspension_id": str(doc.get("pdf_sent_suspension_id", ""))
             })
     
-    return base_data
+    return clean_nan_values(base_data)
