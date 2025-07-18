@@ -8,6 +8,7 @@ import { Popover, Button } from '@mantine/core';
 import { searchData } from '@/libs/search';
 import { FloatingLabelInput } from '@/libs/FloatingLabelInput';
 import { CheckCircle, Filter, Download } from "lucide-react";
+import { isSameDay , isSameWeek , isSameMonth } from "@/libs/dataFilters";
 import * as XLSX from 'xlsx';
 
 // Helper function to map API status to display status
@@ -220,7 +221,7 @@ export default function AllDataPage() {
   const [allCases, setAllCases] = useState<CaseData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [periodFilter, setPeriodFilter] = useState<'none' | 'daily' | 'weekly' | 'monthly'>('none');
   const [popoverOpened, setPopoverOpened] = useState(false);
   const [showUnsentOnly, setShowUnsentOnly] = useState(false);
 
@@ -250,11 +251,27 @@ export default function AllDataPage() {
   const filteredCases = useMemo(() => {
     let cases = allCases;
     
-    // Apply date range filter
+    // Apply date range filter (from DatePicker)
     if (dateRange[0] || dateRange[1]) {
       cases = cases.filter(caseItem => 
         isDateInRange(caseItem.date, dateRange[0], dateRange[1])
-      );
+     );
+    }
+    // Apply period filter (Daily, Weekly, Monthly)
+    if (periodFilter !== 'none') { // ตรวจสอบว่ามีการเลือก period filter หรือไม่
+      const today = new Date(); // กำหนดวันที่ปัจจุบันเป็น reference
+      cases = cases.filter(caseItem => {
+        switch (periodFilter) {
+          case 'daily':
+            return isSameDay(caseItem.date, today); // ใช้ isSameDay จาก dateFilters
+          case 'weekly':
+            return isSameWeek(caseItem.date, today); // ใช้ isSameWeek จาก dateFilters
+          case 'monthly':
+           return isSameMonth(caseItem.date, today); // ใช้ isSameMonth จาก dateFilters
+          default:
+            return true;
+        }
+      });
     }
     
     // Apply unsent filter
@@ -269,8 +286,7 @@ export default function AllDataPage() {
     }
 
     return cases;
-  }, [allCases, dateRange, showUnsentOnly, debouncedSearchTerm]);
-
+  }, [allCases, dateRange, periodFilter, showUnsentOnly, debouncedSearchTerm]);
   // Paginated cases for rendering
   const paginatedCases = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -298,8 +314,8 @@ export default function AllDataPage() {
 
   // Reset pagination when filters change
   useEffect(() => {
-    setCurrentPage(1);
-  }, [dateRange, showUnsentOnly, debouncedSearchTerm]);
+  setCurrentPage(1);
+  }, [dateRange, periodFilter, showUnsentOnly, debouncedSearchTerm]);
 
   // Fetch all data from API (only once on component mount)
   const fetchAllData = useCallback(async () => {
@@ -348,7 +364,7 @@ export default function AllDataPage() {
   // Handle date range change
   const handleDateRangeChange = useCallback((range: DatesRangeValue) => {
     setDateRange(range);
-    
+    setPeriodFilter('none');
     // Only close popover if both dates are selected or if range is cleared
     const [start, end] = range;
     if ((start && end) || (!start && !end)) {
@@ -359,7 +375,8 @@ export default function AllDataPage() {
 
   // Handle period change
   const handlePeriodChange = useCallback((newPeriod: 'daily' | 'weekly' | 'monthly') => {
-    setPeriod(newPeriod);
+    setPeriodFilter(newPeriod);
+    setDateRange([null, null]);
   }, []);
 
   // Handle case selection
@@ -647,11 +664,12 @@ export default function AllDataPage() {
           </Popover>
 
           {/* Clear All Filters Button */}
-          {((dateRange[0] || dateRange[1]) || showUnsentOnly) && (
+          {((dateRange[0] || dateRange[1]) || showUnsentOnly || periodFilter !== 'none') && (
             <button
               onClick={() => {
                 setDateRange([null, null]);
                 setShowUnsentOnly(false);
+                setPeriodFilter('none');
                 setPopoverOpened(false);
               }}
               className="px-3 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors text-sm"
@@ -662,22 +680,22 @@ export default function AllDataPage() {
 
           {/* Period Filter Buttons */}
           <div className="flex gap-2 ml-auto">
-            {[
-              { key: 'daily', label: 'รายวัน' },
-              { key: 'weekly', label: 'รายสัปดาห์' },
-              { key: 'monthly', label: 'รายเดือน' }
-            ].map(({ key, label }) => (
-              <button
+           {[
+             { key: 'daily', label: 'รายวัน' },
+             { key: 'weekly', label: 'รายสัปดาห์' },
+             { key: 'monthly', label: 'รายเดือน' }
+           ].map(({ key, label }) => (
+             <button
                 key={key}
                 className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
-                  period === key 
-                    ? 'bg-blue-600 text-white border-blue-700' 
+                  periodFilter === key // ใช้ periodFilter ในการตรวจสอบสถานะปุ่มที่ถูกเลือก
+                   ? 'bg-blue-600 text-white border-blue-700' 
                     : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-50'
                 }`}
-                onClick={() => handlePeriodChange(key as 'daily' | 'weekly' | 'monthly')}
+                 onClick={() => handlePeriodChange(key as 'daily' | 'weekly' | 'monthly')}
               >
                 {label}
-              </button>
+             </button>
             ))}
           </div>
         </div>
