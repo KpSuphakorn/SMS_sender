@@ -275,51 +275,76 @@ def create_request_endpoint(data: SenderRequest, current_user: dict = Depends(ge
         "requested_senders": [r["sender_name"] for r in rows_to_request]
     }
 
-@router.post("/complete-suspension/{request_id}/{sender_name}")
-def complete_suspension_endpoint(request_id: str, sender_name: str):
+@router.post("/complete-suspension/{sender_name}")
+def complete_suspension_endpoint(sender_name: str):
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
-    doc = sender_names.find_one({"request_ids.id": request_id, "sender_name": sender_name})
+    
+    # ค้นหาเอกสารด้วย sender_name
+    doc = sender_names.find_one({"sender_name": sender_name})
     if not doc:
-        raise HTTPException(status_code=404, detail="Sender not found for this request")
+        raise HTTPException(status_code=404, detail="Sender not found")
     
     updated_at = datetime.datetime.now()
     current_status = doc.get("status", [])
+    
+    # ตรวจสอบสถานะปัจจุบัน
     if is_status_object(current_status):
         status_names = [s["name"] for s in current_status]
     else:
         status_names = current_status
     
+    # ถ้าถูกระงับไปแล้ว ไม่ต้องทำอะไร
+    if "suspended" in status_names:
+        return {"message": "Sender already marked as suspended"}
+    
+    # เตรียมข้อมูลสำหรับอัพเดต
     update_data = {
-        "request_ids.$[elem].status": "suspended",
         "updated_at": updated_at,
         "suspended_at": updated_at
     }
     
-    if "suspended" not in status_names:
-        if is_status_object(current_status):
-            update_data["status"] = current_status + [{"name": "suspended", "updated_at": updated_at}]
-        else:
-            update_data["status"] = [{"name": s, "updated_at": doc.get("updated_at", updated_at)} for s in current_status] + [{"name": "suspended", "updated_at": updated_at}]
+    # อัพเดตสถานะ
+    if is_status_object(current_status):
+        update_data["status"] = current_status + [{"name": "suspended", "updated_at": updated_at}]
+    else:
+        update_data["status"] = [{"name": s, "updated_at": doc.get("updated_at", updated_at)} for s in current_status] + [{"name": "suspended", "updated_at": updated_at}]
     
+    # อัพเดต request_ids ที่มีสถานะไม่ใช่ "suspended"
+    if doc.get("request_ids"):
+        update_data["request_ids"] = [
+            {**req, "status": "suspended"} if req["status"] != "suspended" else req
+            for req in doc.get("request_ids", [])
+        ]
+    
+    # อัพเดตเอกสารใน sender_names
     result = sender_names.update_one(
-        {"request_ids.id": request_id, "sender_name": sender_name},
-        {"$set": update_data},
-        array_filters=[{"elem.id": request_id}]
+        {"sender_name": sender_name},
+        {"$set": update_data}
     )
     
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Sender not found")
+    
     if result.modified_count:
-        response_from_telco.update_one(
-            {"sender_name": sender_name, "request_id": request_id},
-            {
-                "$set": {"updated_at": updated_at},
-                "$push": {"status": {"name": "suspended", "updated_at": updated_at}}
-            },
-            upsert=True
-        )
-    return {"message": "Suspension completed for sender" if result.modified_count else "Sender already marked as suspended"}
+        # อัพเดตหรือเพิ่มข้อมูลใน response_from_telco สำหรับทุก request_id
+        for req in doc.get("request_ids", []):
+            response_from_telco.update_one(
+                {"sender_name": sender_name, "request_id": req["id"]},
+                {
+                    "$set": {
+                        "updated_at": updated_at,
+                        "phone_number": doc.get("phone_number"),
+                        "mobile_provider": doc.get("mobile_provider"),
+                        "full_name": doc.get("full_name"),
+                        "date": doc.get("date")
+                    },
+                    "$push": {"status": {"name": "suspended", "updated_at": updated_at}}
+                },
+                upsert=True
+            )
+    
+    return {"message": "Suspension completed for sender"}
 
 @router.get("/available-senders")
 def get_available_senders_endpoint(start: Optional[str] = Query(None), end: Optional[str] = Query(None)):
