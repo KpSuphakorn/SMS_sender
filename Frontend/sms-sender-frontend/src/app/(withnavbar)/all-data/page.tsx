@@ -20,16 +20,16 @@ const STATUS_ORDER = [
 ];
 
 const mapStatusToDisplay = (statusArray: any[]) => {
-  if (!Array.isArray(statusArray)) return STATUS_ORDER.map(s => ({ label: s.label, done: false }));
-  
-  // Handle both string array and object array formats
-  const statusNames = statusArray.map(s => 
+  if (!Array.isArray(statusArray)) return STATUS_ORDER.map(s => ({ key: s.key, label: s.label, done: false }));
+
+  const statusNames = statusArray.map(s =>
     typeof s === "string" ? s : s?.name
   ).filter(Boolean);
 
   const present = new Set(statusNames);
 
   return STATUS_ORDER.map(s => ({
+    key: s.key, // เพิ่ม key ตรงนี้
     label: s.label,
     done: present.has(s.key)
   }));
@@ -123,7 +123,8 @@ interface CaseData {
   sender: string;
   telco: string;
   actualTelco: string;
-  statuses: Array<{ label: string; done: boolean }>;
+  //statuses: Array<{ label: string; done: boolean }>;
+  statuses: Array<{ key: string; label: string; done: boolean }>;
   details: string;
   phone_number: string;
   created_at: string;
@@ -225,6 +226,8 @@ export default function AllDataPage() {
   const [popoverOpened, setPopoverOpened] = useState(false);
   const [showUnsentOnly, setShowUnsentOnly] = useState(false);
 
+  const [statusFilter, setStatusFilter] = useState<string | 'none'>('none');
+
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState<string>('');
   
@@ -249,44 +252,62 @@ export default function AllDataPage() {
 
   // Memoized filtered cases based on date range and unsent filter
   const filteredCases = useMemo(() => {
-    let cases = allCases;
-    
-    // Apply date range filter (from DatePicker)
-    if (dateRange[0] || dateRange[1]) {
-      cases = cases.filter(caseItem => 
-        isDateInRange(caseItem.date, dateRange[0], dateRange[1])
-     );
-    }
-    // Apply period filter (Daily, Weekly, Monthly)
-    if (periodFilter !== 'none') { // ตรวจสอบว่ามีการเลือก period filter หรือไม่
-      const today = new Date(); // กำหนดวันที่ปัจจุบันเป็น reference
-      cases = cases.filter(caseItem => {
-        switch (periodFilter) {
-          case 'daily':
-            return isSameDay(caseItem.date, today); // ใช้ isSameDay จาก dateFilters
-          case 'weekly':
-            return isSameWeek(caseItem.date, today); // ใช้ isSameWeek จาก dateFilters
-          case 'monthly':
-           return isSameMonth(caseItem.date, today); // ใช้ isSameMonth จาก dateFilters
-          default:
-            return true;
-        }
-      });
-    }
-    
-    // Apply unsent filter
-    if (showUnsentOnly) {
-      cases = cases.filter(caseItem => 
-        !caseItem.statuses.some(status => status.done)
-      );
-    }
-    
-    if (debouncedSearchTerm) { 
-        cases = searchData(cases, debouncedSearchTerm); 
-    }
+  let cases = allCases;
+  
+  // Apply date range filter (from DatePicker)
+  if (dateRange[0] || dateRange[1]) {
+    cases = cases.filter(caseItem => 
+      isDateInRange(caseItem.date, dateRange[0], dateRange[1])
+    );
+  }
+  
+  // Apply period filter (Daily, Weekly, Monthly)
+  if (periodFilter !== 'none') {
+    const today = new Date();
+    cases = cases.filter(caseItem => {
+      switch (periodFilter) {
+        case 'daily':
+          return isSameDay(caseItem.date, today);
+        case 'weekly':
+          return isSameWeek(caseItem.date, today);
+        case 'monthly':
+          return isSameMonth(caseItem.date, today);
+        default:
+          return true;
+      }
+    });
+  }
 
-    return cases;
-  }, [allCases, dateRange, periodFilter, showUnsentOnly, debouncedSearchTerm]);
+  // [NEW] Apply status filter
+  if (statusFilter !== 'none') {
+    // console.log(`Filtering for status: ${statusFilter}`); // Debug log
+    cases = cases.filter(caseItem => {
+      // console.log(`  Case ID: ${caseItem.id}, Case Statuses:`, caseItem.statuses); // Debug log
+      // ตรวจสอบว่า caseItem มีสถานะที่ตรงกับ statusFilter และสถานะนั้นถูกทำเครื่องหมายว่า 'done' หรือไม่
+      const hasStatus = caseItem.statuses.some(s => s.key === statusFilter && s.done);
+      // console.log(`  Has status '${statusFilter}'? ${hasStatus}`); // Debug log
+      return hasStatus;
+    });
+  }
+
+  // Apply unsent filter (ควรทำงานแยกจาก filter สถานะเฉพาะ)
+  if (showUnsentOnly) {
+    cases = cases.filter(caseItem => 
+      !caseItem.statuses.some(status => status.done) // กรองเฉพาะเคสที่ไม่มีสถานะใดๆ เป็น 'done'
+    );
+  }
+  
+  if (debouncedSearchTerm) { 
+      cases = searchData(cases, debouncedSearchTerm).map(caseItem => ({
+        ...caseItem,
+        statuses: mapStatusToDisplay(caseItem.statuses)
+      })); 
+  }
+
+  // console.log(`Total filtered cases for current filters: ${cases.length}`); // Debug log
+  return cases;
+}, [allCases, dateRange, periodFilter, statusFilter, showUnsentOnly, debouncedSearchTerm]); // เพิ่ม statusFilter ใน dependencies array
+
   // Paginated cases for rendering
   const paginatedCases = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
@@ -365,6 +386,8 @@ export default function AllDataPage() {
   const handleDateRangeChange = useCallback((range: DatesRangeValue) => {
     setDateRange(range);
     setPeriodFilter('none');
+    setStatusFilter('none')
+    setShowUnsentOnly(false);
     // Only close popover if both dates are selected or if range is cleared
     const [start, end] = range;
     if ((start && end) || (!start && !end)) {
@@ -376,7 +399,18 @@ export default function AllDataPage() {
   // Handle period change
   const handlePeriodChange = useCallback((newPeriod: 'daily' | 'weekly' | 'monthly') => {
     setPeriodFilter(newPeriod);
+    setStatusFilter('none')
     setDateRange([null, null]);
+    setShowUnsentOnly(false);
+  }, []);
+
+  // [NEW] Handle status filter change
+  const handleStatusFilterChange = useCallback((newStatus: string | 'none') => {
+   setStatusFilter(newStatus); // ตั้งค่าสถานะ Filter ใหม่
+    // เมื่อเลือก Filter สถานะ ให้ล้าง Filter อื่นๆ ที่อาจขัดแย้งกัน
+   setDateRange([null, null]); // ล้าง Filter ช่วงวันที่
+    setPeriodFilter('none'); // ล้าง Filter รายวัน/สัปดาห์/เดือน
+   setShowUnsentOnly(false); // ล้าง Filter รายงานที่ยังไม่เคยส่ง
   }, []);
 
   // Handle case selection
@@ -386,7 +420,15 @@ export default function AllDataPage() {
 
   // Handle unsent filter toggle
   const handleUnsentToggle = useCallback(() => {
-    setShowUnsentOnly(prev => !prev);
+    setShowUnsentOnly(prev => {
+     // If toggling ON unsent filter, clear other filters
+      if (!prev) {
+        setDateRange([null, null]);
+        setPeriodFilter('none');
+        setStatusFilter('none'); // Clear status filter
+      }
+     return !prev;
+    });
   }, []);
 
   // Handle modal close
@@ -664,12 +706,13 @@ export default function AllDataPage() {
           </Popover>
 
           {/* Clear All Filters Button */}
-          {((dateRange[0] || dateRange[1]) || showUnsentOnly || periodFilter !== 'none') && (
+          {((dateRange[0] || dateRange[1]) || showUnsentOnly || periodFilter !== 'none' || statusFilter !== 'none') && (
             <button
               onClick={() => {
                 setDateRange([null, null]);
                 setShowUnsentOnly(false);
                 setPeriodFilter('none');
+                setStatusFilter('none');
                 setPopoverOpened(false);
               }}
               className="px-3 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors text-sm"
@@ -699,6 +742,34 @@ export default function AllDataPage() {
             ))}
           </div>
         </div>
+
+            {/* [NEW] Status Filter Buttons Section */}
+<div className="flex flex-wrap items-center gap-4 mt-2">
+  <button
+    className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
+      statusFilter === 'none' 
+        ? 'bg-gray-600 text-white border-gray-700' 
+        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+    }`}
+    onClick={() => handleStatusFilterChange('none')}
+  >
+    ทั้งหมด
+  </button>
+  {STATUS_ORDER.map(({ key, label }) => (
+    <button
+      key={key}
+      className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
+        statusFilter === key 
+          ? 'bg-purple-600 text-white border-purple-700' // สีม่วงสำหรับสถานะที่เลือก
+          : 'bg-white text-purple-700 border-purple-300 hover:bg-purple-50'
+      }`}
+      onClick={() => handleStatusFilterChange(key)}
+    >
+      {label}
+    </button>
+  ))}
+</div>
+
         {/* Search Input */}
         <div className="relative">
           <FloatingLabelInput
@@ -810,6 +881,8 @@ export default function AllDataPage() {
             <div>
               หน้า {currentPage} จาก {totalPages} หน้า | แสดง {((currentPage - 1) * itemsPerPage) + 1}-{Math.min(currentPage * itemsPerPage, filteredCases.length)} จาก {filteredCases.length} รายการ
             </div>
+
+            
             
             {/* Top Pagination Controls */}
             <div className="flex items-center gap-2">
