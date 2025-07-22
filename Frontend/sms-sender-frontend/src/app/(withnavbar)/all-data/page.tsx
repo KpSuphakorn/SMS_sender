@@ -72,6 +72,59 @@ const isDateInRange = (dateStr: string, startDate: any, endDate: any): boolean =
   return true;
 };
 
+// Helper function to get date range for period filters
+const getPeriodDateRange = (period: 'daily' | 'weekly' | 'monthly'): { start: Date; end: Date } => {
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  
+  switch (period) {
+    case 'daily':
+      // Today only
+      return {
+        start: today,
+        end: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) // End of today
+      };
+    
+    case 'weekly':
+      // This week (Sunday to Saturday)
+      const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+      const startOfWeek = new Date(today);
+      startOfWeek.setDate(today.getDate() - dayOfWeek); // Go back to Sunday
+      
+      const endOfWeek = new Date(startOfWeek);
+      endOfWeek.setDate(startOfWeek.getDate() + 6); // Saturday
+      endOfWeek.setHours(23, 59, 59, 999); // End of Saturday
+      
+      return {
+        start: startOfWeek,
+        end: endOfWeek
+      };
+    
+    case 'monthly':
+      // This month
+      const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+      const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0); // Last day of current month
+      endOfMonth.setHours(23, 59, 59, 999);
+      
+      return {
+        start: startOfMonth,
+        end: endOfMonth
+      };
+    
+    default:
+      return { start: today, end: today };
+  }
+};
+
+// Helper function to check if a date is within a period
+const isDateInPeriod = (dateStr: string, period: 'daily' | 'weekly' | 'monthly'): boolean => {
+  const date = new Date(dateStr);
+  if (isNaN(date.getTime())) return false;
+  
+  const { start, end } = getPeriodDateRange(period);
+  return date >= start && date <= end;
+};
+
 // Helper function to format date range display
 const formatDateRange = (dateRange: DatesRangeValue): string => {
   const [start, end] = dateRange;
@@ -246,14 +299,20 @@ export default function AllDataPage() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Memoized filtered cases based on date range and unsent filter
+  // Memoized filtered cases based on date range, period, and unsent filter
   const filteredCases = useMemo(() => {
     let cases = allCases;
     
-    // Apply date range filter
+    // Apply manual date range filter if set
     if (dateRange[0] || dateRange[1]) {
       cases = cases.filter(caseItem => 
         isDateInRange(caseItem.date, dateRange[0], dateRange[1])
+      );
+    }
+    // Apply period filter (daily/weekly/monthly) only if no manual date range is set
+    else if (period) {
+      cases = cases.filter(caseItem => 
+        isDateInPeriod(caseItem.date, period)
       );
     }
     
@@ -269,7 +328,7 @@ export default function AllDataPage() {
     }
 
     return cases;
-  }, [allCases, dateRange, showUnsentOnly, debouncedSearchTerm]);
+  }, [allCases, dateRange, period, showUnsentOnly, debouncedSearchTerm]);
 
   // Paginated cases for rendering
   const paginatedCases = useMemo(() => {
@@ -299,7 +358,7 @@ export default function AllDataPage() {
   // Reset pagination when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [dateRange, showUnsentOnly, debouncedSearchTerm]);
+  }, [dateRange, period, showUnsentOnly, debouncedSearchTerm]);
 
   // Fetch all data from API (only once on component mount)
   const fetchAllData = useCallback(async () => {
@@ -360,6 +419,9 @@ export default function AllDataPage() {
   // Handle period change
   const handlePeriodChange = useCallback((newPeriod: 'daily' | 'weekly' | 'monthly') => {
     setPeriod(newPeriod);
+    // Clear manual date range when period filter is selected
+    setDateRange([null, null]);
+    setPopoverOpened(false);
   }, []);
 
   // Handle case selection
@@ -480,7 +542,7 @@ export default function AllDataPage() {
   // Clear selection when filters change
   useEffect(() => {
     setSelectedCases(new Set());
-  }, [dateRange, showUnsentOnly, debouncedSearchTerm]);
+  }, [dateRange, period, showUnsentOnly, debouncedSearchTerm]);
 
   // Pagination handlers
   const handlePageChange = useCallback((page: number) => {
@@ -647,11 +709,12 @@ export default function AllDataPage() {
           </Popover>
 
           {/* Clear All Filters Button */}
-          {((dateRange[0] || dateRange[1]) || showUnsentOnly) && (
+          {((dateRange[0] || dateRange[1]) || showUnsentOnly || period !== 'daily') && (
             <button
               onClick={() => {
                 setDateRange([null, null]);
                 setShowUnsentOnly(false);
+                setPeriod('daily');
                 setPopoverOpened(false);
               }}
               className="px-3 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors text-sm"
@@ -778,6 +841,13 @@ export default function AllDataPage() {
           <div>
             แสดงผล {paginatedCases.length} จาก {filteredCases.length} รายการที่กรอง ({allCases.length} รายการทั้งหมด)
             {showUnsentOnly && <span className="text-red-600 font-semibold"> (เฉพาะรายงานที่ยังไม่เคยส่ง)</span>}
+            {period && !(dateRange[0] || dateRange[1]) && (
+              <span className="text-blue-600 font-semibold">
+                {' '}({period === 'daily' ? 'วันนี้' : 
+                   period === 'weekly' ? 'สัปดาห์นี้' : 
+                   period === 'monthly' ? 'เดือนนี้' : ''})
+              </span>
+            )}
           </div>
           {showUnsentOnly && (
             <div className="text-red-600 font-semibold">
