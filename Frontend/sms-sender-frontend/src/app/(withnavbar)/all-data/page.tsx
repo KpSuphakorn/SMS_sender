@@ -8,6 +8,7 @@ import { Popover, Button } from '@mantine/core';
 import { searchData } from '@/libs/search';
 import { FloatingLabelInput } from '@/libs/FloatingLabelInput';
 import { CheckCircle, Filter, Download } from "lucide-react";
+import { isSameDay , isSameWeek , isSameMonth } from "@/libs/dataFilters";
 import * as XLSX from 'xlsx';
 
 // Helper function to map API status to display status
@@ -19,16 +20,16 @@ const STATUS_ORDER = [
 ];
 
 const mapStatusToDisplay = (statusArray: any[]) => {
-  if (!Array.isArray(statusArray)) return STATUS_ORDER.map(s => ({ label: s.label, done: false }));
-  
-  // Handle both string array and object array formats
-  const statusNames = statusArray.map(s => 
+  if (!Array.isArray(statusArray)) return STATUS_ORDER.map(s => ({ key: s.key, label: s.label, done: false }));
+
+  const statusNames = statusArray.map(s =>
     typeof s === "string" ? s : s?.name
   ).filter(Boolean);
 
   const present = new Set(statusNames);
 
   return STATUS_ORDER.map(s => ({
+    key: s.key, // เพิ่ม key ตรงนี้
     label: s.label,
     done: present.has(s.key)
   }));
@@ -185,7 +186,8 @@ interface CaseData {
   sender: string;
   telco: string;
   actualTelco: string;
-  statuses: Array<{ label: string; done: boolean }>;
+  //statuses: Array<{ label: string; done: boolean }>;
+  statuses: Array<{ key: string; label: string; done: boolean }>;
   details: string;
   phone_number: string;
   created_at: string;
@@ -287,6 +289,8 @@ export default function AllDataPage() {
   const [popoverOpened, setPopoverOpened] = useState(false);
   const [showUnsentOnly, setShowUnsentOnly] = useState(false);
 
+  const [statusFilter, setStatusFilter] = useState<string | 'none'>('none');
+
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState<string>('');
   
@@ -309,7 +313,7 @@ export default function AllDataPage() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Memoized filtered cases based on date range, period, and unsent filter
+  // Memoized filtered cases based on date range, period, unsent filter, and status filter
   const filteredCases = useMemo(() => {
     let cases = allCases;
     
@@ -333,12 +337,19 @@ export default function AllDataPage() {
       );
     }
     
+    // Apply status filter
+    if (statusFilter && statusFilter !== 'none') {
+      cases = cases.filter(caseItem => 
+        caseItem.statuses.some(status => status.key === statusFilter && status.done)
+      );
+    }
+    
     if (debouncedSearchTerm) { 
-        cases = searchData(cases, debouncedSearchTerm); 
+        cases = searchData(cases as any, debouncedSearchTerm) as CaseData[]; 
     }
 
     return cases;
-  }, [allCases, dateRange, period, showUnsentOnly, debouncedSearchTerm]);
+  }, [allCases, dateRange, period, showUnsentOnly, statusFilter, debouncedSearchTerm]);
 
   // Paginated cases for rendering
   const paginatedCases = useMemo(() => {
@@ -368,7 +379,7 @@ export default function AllDataPage() {
   // Reset pagination when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [dateRange, period, showUnsentOnly, debouncedSearchTerm]);
+  }, [dateRange, period, showUnsentOnly, statusFilter, debouncedSearchTerm]);
 
   // Fetch all data from API (only once on component mount)
   const fetchAllData = useCallback(async () => {
@@ -417,7 +428,9 @@ export default function AllDataPage() {
   // Handle date range change
   const handleDateRangeChange = useCallback((range: DatesRangeValue) => {
     setDateRange(range);
-    
+    setPeriod('all');
+    setStatusFilter('none')
+    setShowUnsentOnly(false);
     // Only close popover if both dates are selected or if range is cleared
     const [start, end] = range;
     if ((start && end) || (!start && !end)) {
@@ -445,7 +458,30 @@ export default function AllDataPage() {
 
   // Handle unsent filter toggle
   const handleUnsentToggle = useCallback(() => {
-    setShowUnsentOnly(prev => !prev);
+    setShowUnsentOnly(prev => {
+     // If toggling ON unsent filter, clear other filters
+      if (!prev) {
+        setDateRange([null, null]);
+        setPeriod('all');
+        setStatusFilter('none'); // Clear status filter
+      }
+     return !prev;
+    });
+  }, []);
+
+  // Handle status filter change
+  const handleStatusFilterChange = useCallback((status: string) => {
+    setStatusFilter(status);
+    // If selecting a specific status, clear other filters
+    if (status !== 'none') {
+      setDateRange([null, null]);
+      setPeriod('all');
+      setShowUnsentOnly(false);
+    }
+    // Reset to first page
+    setCurrentPage(1);
+    // Clear selections to avoid confusion
+    setSelectedCases(new Set());
   }, []);
 
   // Handle modal close
@@ -556,7 +592,7 @@ export default function AllDataPage() {
   // Clear selection when filters change
   useEffect(() => {
     setSelectedCases(new Set());
-  }, [dateRange, period, showUnsentOnly, debouncedSearchTerm]);
+  }, [dateRange, period, showUnsentOnly, statusFilter, debouncedSearchTerm]);
 
   // Pagination handlers
   const handlePageChange = useCallback((page: number) => {
@@ -723,12 +759,13 @@ export default function AllDataPage() {
           </Popover>
 
           {/* Clear All Filters Button */}
-          {((dateRange[0] || dateRange[1]) || showUnsentOnly || period !== 'all') && (
+          {((dateRange[0] || dateRange[1]) || showUnsentOnly || period !== 'all' || statusFilter !== 'none') && (
             <button
               onClick={() => {
                 setDateRange([null, null]);
                 setShowUnsentOnly(false);
                 setPeriod('all');
+                setStatusFilter('none');
                 setPopoverOpened(false);
               }}
               className="px-3 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors text-sm"
@@ -755,10 +792,38 @@ export default function AllDataPage() {
                 onClick={() => handlePeriodChange(key as 'all' | 'daily' | 'weekly' | 'monthly')}
               >
                 {label}
-              </button>
+             </button>
             ))}
           </div>
         </div>
+
+            {/* [NEW] Status Filter Buttons Section */}
+<div className="flex flex-wrap items-center gap-4 mt-2">
+  <button
+    className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
+      statusFilter === 'none' 
+        ? 'bg-gray-600 text-white border-gray-700' 
+        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+    }`}
+    onClick={() => handleStatusFilterChange('none')}
+  >
+    ทั้งหมด
+  </button>
+  {STATUS_ORDER.map(({ key, label }) => (
+    <button
+      key={key}
+      className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
+        statusFilter === key 
+          ? 'bg-purple-600 text-white border-purple-700' // สีม่วงสำหรับสถานะที่เลือก
+          : 'bg-white text-purple-700 border-purple-300 hover:bg-purple-50'
+      }`}
+      onClick={() => handleStatusFilterChange(key)}
+    >
+      {label}
+    </button>
+  ))}
+</div>
+
         {/* Search Input */}
         <div className="relative">
           <FloatingLabelInput
@@ -856,6 +921,11 @@ export default function AllDataPage() {
           <div>
             แสดงผล {paginatedCases.length} จาก {filteredCases.length} รายการที่กรอง ({allCases.length} รายการทั้งหมด)
             {showUnsentOnly && <span className="text-red-600 font-semibold"> (เฉพาะรายงานที่ยังไม่เคยส่ง)</span>}
+            {statusFilter && statusFilter !== 'none' && (
+              <span className="text-purple-600 font-semibold">
+                {' '}(สถานะ: {STATUS_ORDER.find(s => s.key === statusFilter)?.label || statusFilter})
+              </span>
+            )}
             {period && period !== 'all' && !(dateRange[0] || dateRange[1]) && (
               <span className="text-blue-600 font-semibold">
                 {' '}({period === 'daily' ? 'วันนี้' : 
@@ -877,6 +947,8 @@ export default function AllDataPage() {
             <div>
               หน้า {currentPage} จาก {totalPages} หน้า | แสดง {((currentPage - 1) * itemsPerPage) + 1}-{Math.min(currentPage * itemsPerPage, filteredCases.length)} จาก {filteredCases.length} รายการ
             </div>
+
+            
             
             {/* Top Pagination Controls */}
             <div className="flex items-center gap-2">
@@ -947,6 +1019,8 @@ export default function AllDataPage() {
               'ไม่มีข้อมูลในระบบ' : 
               showUnsentOnly ? 
                 'ไม่พบรายงานที่ยังไม่เคยส่ง' : 
+                statusFilter && statusFilter !== 'none' ?
+                  `ไม่พบข้อมูลสำหรับสถานะ: ${STATUS_ORDER.find(s => s.key === statusFilter)?.label || statusFilter}` :
                 period === 'daily' ?
                   'ไม่พบข้อมูลสำหรับวันนี้' :
                 period === 'weekly' ?
