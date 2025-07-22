@@ -62,6 +62,10 @@ def format_sender_doc(doc, include_telco_data=False, response_from_telco=None, i
             for s in status
         ],
         "latest_request_id": latest_request_id,
+        "request_ids": [
+            {"id": req["id"], "status": req.get("status", "unknown")}
+            for req in doc.get("request_ids", [])
+        ],
         "latest_request_status": next((req["status"] for req in doc.get("request_ids", []) if req["id"] == latest_request_id), None),
         "status_description": status_descriptions.get(latest_status_name, "ไม่ทราบสถานะ"),
         "created_at": doc["created_at"],

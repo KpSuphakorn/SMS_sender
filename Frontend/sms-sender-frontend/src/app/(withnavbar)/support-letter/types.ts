@@ -1,5 +1,6 @@
 // Types for support letter page
 export interface Status {
+  key: string;
   label: string;
   done: boolean;
 }
@@ -14,10 +15,17 @@ export interface Case {
   actualTelco: TelcoType;
   statuses: Status[];
   details: string;
+  phone_number: string;
+  full_name: string;
+  created_at: string;
+  updated_at: string;
+  fields: string[];
+  request_ids: Array<{ id: string; status: string }>;
+  reply_file_id?: string;
 }
 
 export interface Book {
-  id: string;
+  id: string; // This will be the request_id
   date: string;
   senderCount: number;
   ais: number;
@@ -26,4 +34,24 @@ export interface Book {
   other: number;
   status: 'urgent' | 'processing' | 'completed' | 'pending';
   cases: Case[];
+}
+
+// Raw data interface from API
+export interface RawCaseData {
+  _id: { $oid: string };
+  sender_name: string;
+  mobile_provider: string;
+  phone_number: string;
+  full_name: string;
+  date: string;
+  status: Array<{
+    name: string;
+    updated_at: { $date: string };
+  }>;
+  created_at: { $date: string };
+  updated_at: { $date: string };
+  created_by: string;
+  fields: string[];
+  request_ids: Array<{ id: string; status: string }>;
+  reply_file_id?: { $oid: string };
 }

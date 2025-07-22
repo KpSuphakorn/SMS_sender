@@ -1,11 +1,13 @@
-import { Clock, CheckCircle, FileText } from "lucide-react";
+import { Clock, CheckCircle, FileText, RefreshCw } from "lucide-react";
 
 interface HeaderProps {
   bookCount: number;
   selectedCount: number;
+  onRefresh?: () => void;
+  isLoading?: boolean;
 }
 
-export const Header = ({ bookCount, selectedCount }: HeaderProps) => (
+export const Header = ({ bookCount, selectedCount, onRefresh, isLoading = false }: HeaderProps) => (
   <div className="bg-white shadow-lg border-b border-gray-200">
     <div className="max-w-7xl mx-auto px-6 py-8">
       <div className="flex items-center justify-between">
@@ -34,6 +36,20 @@ export const Header = ({ bookCount, selectedCount }: HeaderProps) => (
                 <span className="text-green-800 font-semibold">{selectedCount} รายการที่เลือก</span>
               </div>
             </div>
+          )}
+          {onRefresh && (
+            <button
+              onClick={onRefresh}
+              disabled={isLoading}
+              className={`flex items-center space-x-2 px-4 py-2 rounded-lg font-semibold transition-all duration-200 ${
+                isLoading
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : 'bg-green-500 text-white hover:bg-green-600 hover:shadow-md'
+              }`}
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              <span>{isLoading ? 'กำลังรีเฟรช...' : 'รีเฟรช'}</span>
+            </button>
           )}
         </div>
       </div>
