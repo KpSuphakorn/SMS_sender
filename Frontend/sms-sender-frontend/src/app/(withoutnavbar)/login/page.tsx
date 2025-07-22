@@ -169,11 +169,11 @@ export default function LoginPage() {
         </button>
         <div className="text-center text-sm">
           By continuing, you agree to the{" "}
-          <a href="#" className="underline cursor-pointer hover:text-blue-500 transition duration-200">
+          <a href="/term" className="underline cursor-pointer hover:text-blue-500 transition duration-200">
             Terms of use
           </a>{" "}
           and{" "}
-          <a href="#" className="underline cursor-pointer hover:text-blue-500 transition duration-200">
+          <a href="/policy" className="underline cursor-pointer hover:text-blue-500 transition duration-200">
             Privacy Policy
           </a>.
         </div>
