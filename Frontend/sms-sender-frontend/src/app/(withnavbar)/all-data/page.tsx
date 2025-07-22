@@ -73,11 +73,18 @@ const isDateInRange = (dateStr: string, startDate: any, endDate: any): boolean =
 };
 
 // Helper function to get date range for period filters
-const getPeriodDateRange = (period: 'daily' | 'weekly' | 'monthly'): { start: Date; end: Date } => {
+const getPeriodDateRange = (period: 'all' | 'daily' | 'weekly' | 'monthly'): { start: Date; end: Date } => {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   
   switch (period) {
+    case 'all':
+      // Return a very wide date range to show all data
+      return {
+        start: new Date(1900, 0, 1), // Very old date
+        end: new Date(2100, 11, 31) // Very future date
+      };
+    
     case 'daily':
       // Today only
       return {
@@ -117,7 +124,10 @@ const getPeriodDateRange = (period: 'daily' | 'weekly' | 'monthly'): { start: Da
 };
 
 // Helper function to check if a date is within a period
-const isDateInPeriod = (dateStr: string, period: 'daily' | 'weekly' | 'monthly'): boolean => {
+const isDateInPeriod = (dateStr: string, period: 'all' | 'daily' | 'weekly' | 'monthly'): boolean => {
+  // If period is 'all', always return true
+  if (period === 'all') return true;
+  
   const date = new Date(dateStr);
   if (isNaN(date.getTime())) return false;
   
@@ -273,7 +283,7 @@ export default function AllDataPage() {
   const [allCases, setAllCases] = useState<CaseData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [period, setPeriod] = useState<'daily' | 'weekly' | 'monthly'>('daily');
+  const [period, setPeriod] = useState<'all' | 'daily' | 'weekly' | 'monthly'>('all');
   const [popoverOpened, setPopoverOpened] = useState(false);
   const [showUnsentOnly, setShowUnsentOnly] = useState(false);
 
@@ -309,8 +319,8 @@ export default function AllDataPage() {
         isDateInRange(caseItem.date, dateRange[0], dateRange[1])
       );
     }
-    // Apply period filter (daily/weekly/monthly) only if no manual date range is set
-    else if (period) {
+    // Apply period filter (daily/weekly/monthly) only if no manual date range is set and period is not 'all'
+    else if (period && period !== 'all') {
       cases = cases.filter(caseItem => 
         isDateInPeriod(caseItem.date, period)
       );
@@ -417,11 +427,15 @@ export default function AllDataPage() {
   }, []);
 
   // Handle period change
-  const handlePeriodChange = useCallback((newPeriod: 'daily' | 'weekly' | 'monthly') => {
+  const handlePeriodChange = useCallback((newPeriod: 'all' | 'daily' | 'weekly' | 'monthly') => {
     setPeriod(newPeriod);
     // Clear manual date range when period filter is selected
     setDateRange([null, null]);
     setPopoverOpened(false);
+    // Reset to first page to avoid pagination issues
+    setCurrentPage(1);
+    // Clear selections to avoid confusion
+    setSelectedCases(new Set());
   }, []);
 
   // Handle case selection
@@ -709,35 +723,36 @@ export default function AllDataPage() {
           </Popover>
 
           {/* Clear All Filters Button */}
-          {((dateRange[0] || dateRange[1]) || showUnsentOnly || period !== 'daily') && (
+          {((dateRange[0] || dateRange[1]) || showUnsentOnly || period !== 'all') && (
             <button
               onClick={() => {
                 setDateRange([null, null]);
                 setShowUnsentOnly(false);
-                setPeriod('daily');
+                setPeriod('all');
                 setPopoverOpened(false);
               }}
               className="px-3 py-1 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition-colors text-sm"
             >
-              ล้างตัวกรองทั้งหมด
+              Clear All Filters
             </button>
           )}
 
           {/* Period Filter Buttons */}
           <div className="flex gap-2 ml-auto">
             {[
+              { key: 'all', label: 'ทั้งหมด' },
               { key: 'daily', label: 'รายวัน' },
               { key: 'weekly', label: 'รายสัปดาห์' },
               { key: 'monthly', label: 'รายเดือน' }
             ].map(({ key, label }) => (
               <button
                 key={key}
-                className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
+                className={`px-4 py-2 rounded-lg font-semibold border transition-all duration-200 ${
                   period === key 
                     ? 'bg-blue-600 text-white border-blue-700' 
                     : 'bg-white text-blue-700 border-blue-300 hover:bg-blue-50'
                 }`}
-                onClick={() => handlePeriodChange(key as 'daily' | 'weekly' | 'monthly')}
+                onClick={() => handlePeriodChange(key as 'all' | 'daily' | 'weekly' | 'monthly')}
               >
                 {label}
               </button>
@@ -841,7 +856,7 @@ export default function AllDataPage() {
           <div>
             แสดงผล {paginatedCases.length} จาก {filteredCases.length} รายการที่กรอง ({allCases.length} รายการทั้งหมด)
             {showUnsentOnly && <span className="text-red-600 font-semibold"> (เฉพาะรายงานที่ยังไม่เคยส่ง)</span>}
-            {period && !(dateRange[0] || dateRange[1]) && (
+            {period && period !== 'all' && !(dateRange[0] || dateRange[1]) && (
               <span className="text-blue-600 font-semibold">
                 {' '}({period === 'daily' ? 'วันนี้' : 
                    period === 'weekly' ? 'สัปดาห์นี้' : 
@@ -925,14 +940,20 @@ export default function AllDataPage() {
       </div>
 
       {/* Optimized Cards Section with Pagination */}
-      <div className="w-full max-w-6xl flex-1">
+      <div className="w-full max-w-6xl flex-1 min-h-[600px]">
         {filteredCases.length === 0 ? (
           <div className="text-center text-gray-500 text-xl py-12">
             {allCases.length === 0 ? 
               'ไม่มีข้อมูลในระบบ' : 
               showUnsentOnly ? 
                 'ไม่พบรายงานที่ยังไม่เคยส่ง' : 
-                'ไม่พบข้อมูลตามเงื่อนไขที่เลือก'
+                period === 'daily' ?
+                  'ไม่พบข้อมูลสำหรับวันนี้' :
+                period === 'weekly' ?
+                  'ไม่พบข้อมูลสำหรับสัปดาห์นี้' :
+                period === 'monthly' ?
+                  'ไม่พบข้อมูลสำหรับเดือนนี้' :
+                  'ไม่พบข้อมูลตามเงื่อนไขที่เลือก'
             }
           </div>
         ) : (
