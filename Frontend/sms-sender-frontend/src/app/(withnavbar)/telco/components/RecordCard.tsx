@@ -8,13 +8,15 @@ interface RecordCardProps {
   onUpdate: (id: string, updates: Partial<TelcoRecord>) => void;
   onSubmit: (id: string) => void;
   isSubmitting?: boolean;
+  isSubmittingAll?: boolean;
 }
 
 export const RecordCard: React.FC<RecordCardProps> = ({ 
   record, 
   onUpdate, 
   onSubmit,
-  isSubmitting = false
+  isSubmitting = false,
+  isSubmittingAll = false
 }) => {
   const [isExpanded, setIsExpanded] = useState(false);
 
@@ -215,13 +217,18 @@ export const RecordCard: React.FC<RecordCardProps> = ({
                 ) : (
                   <span>กรุณาอัปโหลดเอกสารให้ครบทั้ง 3 ไฟล์</span>
                 )}
+                {isSubmittingAll && (
+                  <span className="block text-yellow-600 font-medium mt-1">
+                    กำลังส่งข้อมูลทั้งหมด...
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => onSubmit(record.id)}
-                disabled={!canSubmit || isSubmitting}
+                disabled={!canSubmit || isSubmitting || isSubmittingAll}
                 className={`
                   px-6 py-3 rounded-lg font-semibold transition-all duration-200 flex items-center gap-2
-                  ${canSubmit && !isSubmitting
+                  ${canSubmit && !isSubmitting && !isSubmittingAll
                     ? 'bg-blue-600 text-white hover:bg-blue-700 shadow-sm hover:shadow-md'
                     : 'bg-gray-200 text-gray-500 cursor-not-allowed'
                   }
@@ -231,6 +238,11 @@ export const RecordCard: React.FC<RecordCardProps> = ({
                   <>
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-500"></div>
                     กำลังส่ง...
+                  </>
+                ) : isSubmittingAll ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-500"></div>
+                    กำลังส่งทั้งหมด...
                   </>
                 ) : record.isSubmitted ? (
                   <>

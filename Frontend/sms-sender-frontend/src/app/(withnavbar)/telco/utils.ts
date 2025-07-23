@@ -1,5 +1,112 @@
 import { TelcoRecord, TelcoFilters, ExcelData, DEFAULT_EXCEL_MAPPING } from './types';
 
+// Template validation result interface
+export interface TemplateValidationResult {
+  isValid: boolean;
+  missingColumns: string[];
+  extraColumns: string[];
+  warnings: string[];
+}
+
+// Validate if Excel headers match the expected template
+export const validateExcelTemplate = (headers: string[]): TemplateValidationResult => {
+  const mapping = DEFAULT_EXCEL_MAPPING;
+  const expectedColumns = Object.values(mapping);
+  const actualColumns = headers.filter(header => header && header.trim() !== '');
+  
+  // Find missing required columns
+  const missingColumns = expectedColumns.filter(col => 
+    !actualColumns.some(actual => 
+      actual.toLowerCase().trim() === col.toLowerCase().trim()
+    )
+  );
+  
+  // Find extra columns that don't match template
+  const extraColumns = actualColumns.filter(col => 
+    !expectedColumns.some(expected => 
+      expected.toLowerCase().trim() === col.toLowerCase().trim()
+    )
+  );
+  
+  // Generate warnings
+  const warnings: string[] = [];
+  
+  if (missingColumns.length > 0) {
+    warnings.push(`ไม่พบคอลัมน์ที่จำเป็น: ${missingColumns.join(', ')}`);
+  }
+  
+  if (extraColumns.length > 0) {
+    warnings.push(`พบคอลัมน์ที่ไม่อยู่ในแม่แบบ: ${extraColumns.join(', ')}`);
+  }
+  
+  if (actualColumns.length === 0) {
+    warnings.push('ไม่พบหัวคอลัมน์ในไฟล์ Excel');
+  }
+  
+  // Check for common Excel issues
+  if (headers.some(h => h && h.toString().includes('Unnamed'))) {
+    warnings.push('พบคอลัมน์ที่ไม่มีชื่อ (Unnamed columns) - อาจเกิดจากการมีข้อมูลในคอลัมน์ที่ไม่ควรมี');
+  }
+  
+  // Check for duplicate headers
+  const duplicates = actualColumns.filter((item, index) => actualColumns.indexOf(item) !== index);
+  if (duplicates.length > 0) {
+    warnings.push(`พบหัวคอลัมน์ซ้ำ: ${[...new Set(duplicates)].join(', ')}`);
+  }
+  
+  const isValid = missingColumns.length === 0 && actualColumns.length > 0 && duplicates.length === 0;
+  
+  return {
+    isValid,
+    missingColumns,
+    extraColumns,
+    warnings
+  };
+};
+
+// Check if Excel file structure is correct
+export const checkExcelStructure = (jsonData: any[][]): TemplateValidationResult => {
+  if (!jsonData || jsonData.length === 0) {
+    return {
+      isValid: false,
+      missingColumns: [],
+      extraColumns: [],
+      warnings: ['ไฟล์ Excel ว่างเปล่าหรือไม่สามารถอ่านได้']
+    };
+  }
+  
+  if (jsonData.length < 2) {
+    return {
+      isValid: false,
+      missingColumns: [],
+      extraColumns: [],
+      warnings: ['ไฟล์ Excel ต้องมีหัวคอลัมน์และข้อมูลอย่างน้อย 1 แถว']
+    };
+  }
+  
+  const headers = jsonData[0] as string[];
+  return validateExcelTemplate(headers);
+};
+
+// Get helpful suggestions based on validation results
+export const getTemplateHelpSuggestions = (validation: TemplateValidationResult): string[] => {
+  const suggestions: string[] = [];
+  
+  if (validation.missingColumns.length > 0) {
+    suggestions.push('ตรวจสอบว่าคอลัมน์ที่จำเป็นครบถ้วน โดยเฉพาะ: ' + validation.missingColumns.slice(0, 3).join(', '));
+  }
+  
+  if (validation.extraColumns.length > 0) {
+    suggestions.push('ลบคอลัมน์ที่ไม่จำเป็นออก หรือเปลี่ยนชื่อให้ตรงกับแม่แบบ');
+  }
+  
+  suggestions.push('ดาวน์โหลดแม่แบบใหม่และคัดลอกข้อมูลไปใส่');
+  suggestions.push('ตรวจสอบว่าแถวแรกเป็นหัวคอลัมน์ (Header) ไม่ใช่ข้อมูล');
+  suggestions.push('บันทึกไฟล์ในรูปแบบ Excel (.xlsx) ไม่ใช่ CSV หรือรูปแบบอื่น');
+  
+  return suggestions;
+};
+
 // Utility functions for telco data processing
 export const generateMockRecord = (index: number): TelcoRecord => ({
   id: `record-${index + 1}`,
@@ -249,4 +356,26 @@ export const sortRecords = (records: TelcoRecord[], sortBy: string, sortOrder: '
   });
 
   return sortedRecords;
+};
+
+// Validate if a record is ready for submission
+export const canSubmitRecord = (record: TelcoRecord): boolean => {
+  return !!(record.registrationDocument && record.paymentProof && record.idCard && !record.isSubmitted);
+};
+
+// Get submission validation results for all records
+export const getSubmissionValidation = (records: TelcoRecord[]) => {
+  const submittableRecords = records.filter(canSubmitRecord);
+  const alreadySubmitted = records.filter(record => record.isSubmitted);
+  const missingDocuments = records.filter(record => 
+    !record.isSubmitted && !canSubmitRecord(record)
+  );
+
+  return {
+    submittableRecords,
+    alreadySubmitted,
+    missingDocuments,
+    canSubmitAll: submittableRecords.length > 0,
+    totalReadyToSubmit: submittableRecords.length
+  };
 };
