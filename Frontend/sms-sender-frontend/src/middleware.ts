@@ -13,13 +13,21 @@ export async function middleware(request: NextRequest) {
   // Role-based access control
   const { role } = token as { role?: string };
 
-  // If user is not admin and tries to access anything except /all-data or /mainmenu, redirect to /all-data
-  if (
-    role !== 'admin' &&
-    !request.nextUrl.pathname.startsWith('/all-data') &&
-    !request.nextUrl.pathname.startsWith('/mainmenu')
-  ) {
-    return NextResponse.redirect(new URL('/nice-try', request.url));
+  // Role-specific access control
+  if (request.nextUrl.pathname.startsWith('/telco')) {
+    // Only telco role can access telco pages
+    if (role !== 'telco') {
+      return NextResponse.redirect(new URL('/nice-try', request.url));
+    }
+  } else {
+    // For other pages, if user is not admin and tries to access anything except /all-data or /mainmenu, redirect to /all-data
+    if (
+      role !== 'admin' &&
+      !request.nextUrl.pathname.startsWith('/all-data') &&
+      !request.nextUrl.pathname.startsWith('/mainmenu')
+    ) {
+      return NextResponse.redirect(new URL('/nice-try', request.url));
+    }
   }
 
   // If admin, allow access to all pages
@@ -33,6 +41,7 @@ export const config = {
     '/all-data/:path*',
     '/support-letter/:path*',
     '/dashboard/:path*',
+    '/telco/:path*',
     // Add more protected routes here if needed
   ],
 };

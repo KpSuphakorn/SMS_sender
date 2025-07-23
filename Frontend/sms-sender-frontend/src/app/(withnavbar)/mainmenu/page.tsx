@@ -1,7 +1,7 @@
 'use client'
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { LayoutDashboard, FileText, Search } from "lucide-react";
+import { LayoutDashboard, FileText, Search, Building2 } from "lucide-react";
 
 const menuItems = [
   { 
@@ -21,6 +21,15 @@ const menuItems = [
     hoverColor: "hover:border-purple-200",
     textColor: "group-hover:text-purple-700",
     roles: ["admin"], // Only admin can see
+  },
+  { 
+    label: "จัดการข้อมูล Telco", 
+    path: "/telco",
+    icon: Building2,
+    color: "from-green-500 to-green-600",
+    hoverColor: "hover:border-green-200",
+    textColor: "group-hover:text-green-700",
+    roles: ["telco"], // Only telco can see
   },
   { 
     label: "ค้นหาข้อมูลทั้งหมด", 
