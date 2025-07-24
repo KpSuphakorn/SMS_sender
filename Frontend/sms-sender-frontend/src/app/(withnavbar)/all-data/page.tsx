@@ -8,10 +8,10 @@ import { Popover, Button } from '@mantine/core';
 import { searchData } from '@/libs/search';
 import { FloatingLabelInput } from '@/libs/FloatingLabelInput';
 import { CheckCircle, Filter, Download } from "lucide-react";
-import { isSameDay , isSameWeek , isSameMonth } from "@/libs/dataFilters";
+import { isSameDay, isSameWeek, isSameMonth } from "@/libs/dataFilters";
 import * as XLSX from 'xlsx';
+import storeSenderCollection from "@/libs/storeSenderCollection";
 
-// Helper function to map API status to display status
 const STATUS_ORDER = [
   { key: "pending", label: "ขอข้อมูลแล้ว" },
   { key: "received", label: "ได้รับข้อมูลแล้ว" },
@@ -29,31 +29,27 @@ const mapStatusToDisplay = (statusArray: any[]) => {
   const present = new Set(statusNames);
 
   return STATUS_ORDER.map(s => ({
-    key: s.key, // เพิ่ม key ตรงนี้
+    key: s.key,
     label: s.label,
     done: present.has(s.key)
   }));
 };
 
-// Helper function to check if a date is within range
 const isDateInRange = (dateStr: string, startDate: any, endDate: any): boolean => {
   if (!startDate && !endDate) return true;
   
   const date = new Date(dateStr);
   if (isNaN(date.getTime())) return false;
   
-  // Convert start and end dates to proper Date objects
   const start = startDate ? (startDate instanceof Date ? startDate : new Date(startDate)) : null;
   const end = endDate ? (endDate instanceof Date ? endDate : new Date(endDate)) : null;
   
-  // Check if converted dates are valid
   const isStartValid = start ? !isNaN(start.getTime()) : true;
   const isEndValid = end ? !isNaN(end.getTime()) : true;
   
   if (!isStartValid && !isEndValid) return true;
   
   if (start && end && isStartValid && isEndValid) {
-    // Set time to start/end of day for proper comparison
     const startOfDay = new Date(start);
     startOfDay.setHours(0, 0, 0, 0);
     const endOfDay = new Date(end);
@@ -73,35 +69,31 @@ const isDateInRange = (dateStr: string, startDate: any, endDate: any): boolean =
   return true;
 };
 
-// Helper function to get date range for period filters
 const getPeriodDateRange = (period: 'all' | 'daily' | 'weekly' | 'monthly'): { start: Date; end: Date } => {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   
   switch (period) {
     case 'all':
-      // Return a very wide date range to show all data
       return {
-        start: new Date(1900, 0, 1), // Very old date
-        end: new Date(2100, 11, 31) // Very future date
+        start: new Date(1900, 0, 1),
+        end: new Date(2100, 11, 31)
       };
     
     case 'daily':
-      // Today only
       return {
         start: today,
-        end: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1) // End of today
+        end: new Date(today.getTime() + 24 * 60 * 60 * 1000 - 1)
       };
     
     case 'weekly':
-      // This week (Sunday to Saturday)
-      const dayOfWeek = today.getDay(); // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
+      const dayOfWeek = today.getDay();
       const startOfWeek = new Date(today);
-      startOfWeek.setDate(today.getDate() - dayOfWeek); // Go back to Sunday
+      startOfWeek.setDate(today.getDate() - dayOfWeek);
       
       const endOfWeek = new Date(startOfWeek);
-      endOfWeek.setDate(startOfWeek.getDate() + 6); // Saturday
-      endOfWeek.setHours(23, 59, 59, 999); // End of Saturday
+      endOfWeek.setDate(startOfWeek.getDate() + 6);
+      endOfWeek.setHours(23, 59, 59, 999);
       
       return {
         start: startOfWeek,
@@ -109,9 +101,8 @@ const getPeriodDateRange = (period: 'all' | 'daily' | 'weekly' | 'monthly'): { s
       };
     
     case 'monthly':
-      // This month
       const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-      const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0); // Last day of current month
+      const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
       endOfMonth.setHours(23, 59, 59, 999);
       
       return {
@@ -124,9 +115,7 @@ const getPeriodDateRange = (period: 'all' | 'daily' | 'weekly' | 'monthly'): { s
   }
 };
 
-// Helper function to check if a date is within a period
 const isDateInPeriod = (dateStr: string, period: 'all' | 'daily' | 'weekly' | 'monthly'): boolean => {
-  // If period is 'all', always return true
   if (period === 'all') return true;
   
   const date = new Date(dateStr);
@@ -136,14 +125,12 @@ const isDateInPeriod = (dateStr: string, period: 'all' | 'daily' | 'weekly' | 'm
   return date >= start && date <= end;
 };
 
-// Helper function to format date range display
 const formatDateRange = (dateRange: DatesRangeValue): string => {
   const [start, end] = dateRange;
   
   const format = (d: any): string => {
     if (!d) return "";
     
-    // Handle different date formats
     let date: Date;
     if (d instanceof Date) {
       date = d;
@@ -155,7 +142,6 @@ const formatDateRange = (dateRange: DatesRangeValue): string => {
       return "";
     }
     
-    // Check if date is valid
     if (isNaN(date.getTime())) return "";
     
     return date.toLocaleDateString('th-TH');
@@ -167,26 +153,12 @@ const formatDateRange = (dateRange: DatesRangeValue): string => {
   return "เลือกช่วงวันที่";
 };
 
-// API function to create request
-const createRequest = async (data: any, token: string | undefined) => {
-  const URL = process.env.NEXT_PUBLIC_BACKEND_URL || '';
-  return fetch(`${URL}/api/request`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify(data)
-  }).then(res => res.json());
-};
-
 interface CaseData {
   id: string;
   date: string;
   sender: string;
   telco: string;
   actualTelco: string;
-  //statuses: Array<{ label: string; done: boolean }>;
   statuses: Array<{ key: string; label: string; done: boolean }>;
   details: string;
   phone_number: string;
@@ -198,7 +170,6 @@ interface CaseData {
   full_name?: string;
 }
 
-// Memoized CaseCard component for better performance
 const CaseCard = memo(({ 
   caseItem, 
   isSelected, 
@@ -218,7 +189,6 @@ const CaseCard = memo(({
     }`}
   >
     <div className="flex flex-row items-center gap-6">
-      {/* Selection Checkbox */}
       <label className="flex items-center cursor-pointer">
         <input
           type="checkbox"
@@ -248,7 +218,6 @@ const CaseCard = memo(({
           </div>
         </div>
         
-        {/* Status Bar */}
         <div className="flex-1 flex flex-row items-center gap-2 min-w-96">
           {caseItem.statuses.map((status, i) => (
             <div key={i} className="flex flex-col items-center flex-1">
@@ -288,23 +257,16 @@ export default function AllDataPage() {
   const [period, setPeriod] = useState<'all' | 'daily' | 'weekly' | 'monthly'>('all');
   const [popoverOpened, setPopoverOpened] = useState(false);
   const [showUnsentOnly, setShowUnsentOnly] = useState(false);
-
   const [statusFilter, setStatusFilter] = useState<string | 'none'>('none');
-
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [debouncedSearchTerm, setDebouncedSearchTerm] = useState<string>('');
-  
-  // New state for case selection and submission
   const [selectedCases, setSelectedCases] = useState<Set<string>>(new Set());
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitSuccess, setSubmitSuccess] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
-
-  // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
-  const [itemsPerPage] = useState(50); // Show 50 items per page for better performance
+  const [itemsPerPage] = useState(50);
 
-  // Debounce search term to improve performance
   useEffect(() => {
     const timer = setTimeout(() => {
       setDebouncedSearchTerm(searchTerm);
@@ -313,31 +275,25 @@ export default function AllDataPage() {
     return () => clearTimeout(timer);
   }, [searchTerm]);
 
-  // Memoized filtered cases based on date range, period, unsent filter, and status filter
   const filteredCases = useMemo(() => {
     let cases = allCases;
     
-    // Apply manual date range filter if set
     if (dateRange[0] || dateRange[1]) {
       cases = cases.filter(caseItem => 
         isDateInRange(caseItem.date, dateRange[0], dateRange[1])
       );
-    }
-    // Apply period filter (daily/weekly/monthly) only if no manual date range is set and period is not 'all'
-    else if (period && period !== 'all') {
+    } else if (period && period !== 'all') {
       cases = cases.filter(caseItem => 
         isDateInPeriod(caseItem.date, period)
       );
     }
     
-    // Apply unsent filter
     if (showUnsentOnly) {
       cases = cases.filter(caseItem => 
         !caseItem.statuses.some(status => status.done)
       );
     }
     
-    // Apply status filter
     if (statusFilter && statusFilter !== 'none') {
       cases = cases.filter(caseItem => 
         caseItem.statuses.some(status => status.key === statusFilter && status.done)
@@ -351,46 +307,38 @@ export default function AllDataPage() {
     return cases;
   }, [allCases, dateRange, period, showUnsentOnly, statusFilter, debouncedSearchTerm]);
 
-  // Paginated cases for rendering
   const paginatedCases = useMemo(() => {
     const startIndex = (currentPage - 1) * itemsPerPage;
     const endIndex = startIndex + itemsPerPage;
     return filteredCases.slice(startIndex, endIndex);
   }, [filteredCases, currentPage, itemsPerPage]);
 
-  // Total pages calculation
   const totalPages = useMemo(() => 
     Math.ceil(filteredCases.length / itemsPerPage), 
     [filteredCases.length, itemsPerPage]
   );
 
-  // Get all filtered case IDs (across all pages)
   const allFilteredCaseIds = useMemo(() => 
     filteredCases.map(c => c.id), 
     [filteredCases]
   );
 
-  // Check if all filtered cases are selected (across all pages)
   const isAllFilteredSelected = useMemo(() => 
     allFilteredCaseIds.length > 0 && allFilteredCaseIds.every(id => selectedCases.has(id)), 
     [allFilteredCaseIds, selectedCases]
   );
 
-  // Reset pagination when filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [dateRange, period, showUnsentOnly, statusFilter, debouncedSearchTerm]);
 
-  // Fetch all data from API (only once on component mount)
   const fetchAllData = useCallback(async () => {
     try {
       setLoading(true);
       setError(null);
       
-      // Fetch all data without date restrictions
       const data = await getAvailableSenders("", "");
       
-      // Map API data to card format
       const mappedCases: CaseData[] = data.map((item: any, idx: number) => ({
         id: item._id?.$oid || `${item.sender_name}-${idx}`,
         date: item.date,
@@ -408,7 +356,6 @@ export default function AllDataPage() {
         full_name: item.full_name,
       }));
       
-      // Sort by date (newest first)
       mappedCases.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       
       setAllCases(mappedCases);
@@ -418,83 +365,65 @@ export default function AllDataPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [session]);
 
-  // Fetch data only once on component mount
   useEffect(() => {
     fetchAllData();
   }, [fetchAllData]);
 
-  // Handle date range change
   const handleDateRangeChange = useCallback((range: DatesRangeValue) => {
     setDateRange(range);
     setPeriod('all');
-    setStatusFilter('none')
+    setStatusFilter('none');
     setShowUnsentOnly(false);
-    // Only close popover if both dates are selected or if range is cleared
     const [start, end] = range;
     if ((start && end) || (!start && !end)) {
       setPopoverOpened(false);
     }
-    // Keep popover open if only start date is selected (waiting for end date)
   }, []);
 
-  // Handle period change
   const handlePeriodChange = useCallback((newPeriod: 'all' | 'daily' | 'weekly' | 'monthly') => {
     setPeriod(newPeriod);
-    // Clear manual date range when period filter is selected
     setDateRange([null, null]);
     setPopoverOpened(false);
-    // Reset to first page to avoid pagination issues
     setCurrentPage(1);
-    // Clear selections to avoid confusion
     setSelectedCases(new Set());
   }, []);
 
-  // Handle case selection
   const handleCaseClick = useCallback((caseItem: CaseData) => {
     setSelectedCase(caseItem);
   }, []);
 
-  // Handle unsent filter toggle
   const handleUnsentToggle = useCallback(() => {
     setShowUnsentOnly(prev => {
-     // If toggling ON unsent filter, clear other filters
       if (!prev) {
         setDateRange([null, null]);
         setPeriod('all');
-        setStatusFilter('none'); // Clear status filter
+        setStatusFilter('none');
       }
-     return !prev;
+      return !prev;
     });
   }, []);
 
-  // Handle status filter change
   const handleStatusFilterChange = useCallback((status: string) => {
     setStatusFilter(status);
-    // If selecting a specific status, clear other filters
     if (status !== 'none') {
       setDateRange([null, null]);
       setPeriod('all');
       setShowUnsentOnly(false);
     }
-    // Reset to first page
     setCurrentPage(1);
-    // Clear selections to avoid confusion
     setSelectedCases(new Set());
   }, []);
 
-  // Handle modal close
   const handleModalClose = useCallback(() => {
     setSelectedCase(null);
   }, []);
 
-  // Handle refresh
   const handleRefresh = useCallback(() => {
     fetchAllData();
   }, [fetchAllData]);
 
-  // Handle individual case selection
   const handleCaseSelection = useCallback((caseId: string, isSelected: boolean) => {
     setSelectedCases(prev => {
       const newSet = new Set(prev);
@@ -507,16 +436,13 @@ export default function AllDataPage() {
     });
   }, []);
 
-  // Handle select all toggle
   const handleSelectAllToggle = useCallback(() => {
     setSelectedCases(prev => {
       if (isAllFilteredSelected) {
-        // Deselect all filtered cases (across all pages)
         const newSet = new Set(prev);
         allFilteredCaseIds.forEach(id => newSet.delete(id));
         return newSet;
       } else {
-        // Select all filtered cases (across all pages)
         const newSet = new Set(prev);
         allFilteredCaseIds.forEach(id => newSet.add(id));
         return newSet;
@@ -524,7 +450,6 @@ export default function AllDataPage() {
     });
   }, [isAllFilteredSelected, allFilteredCaseIds]);
 
-  // Handle submit selected cases
   const handleSubmit = useCallback(async () => {
     if (selectedCases.size === 0) {
       setSubmitError('กรุณาเลือกเคสที่ต้องการส่ง');
@@ -536,10 +461,8 @@ export default function AllDataPage() {
     setSubmitSuccess(null);
 
     try {
-      // Get selected case data
       const selectedCaseData = allCases.filter(c => selectedCases.has(c.id));
       
-      // Prepare data for API
       const requestData = {
         fields: ["sender_name", "mobile_provider", "phone_number", "full_name", "date"],
         rows: selectedCaseData.map(caseItem => ({
@@ -551,35 +474,54 @@ export default function AllDataPage() {
         }))
       };
 
-      // Get token from session (use only session.user.token)
-      const token = session?.user?.token;
-
-      // Submit to API
-      const response = await createRequest(requestData, token);
+      const token = session?.user?.token ?? "";
+      const response = await storeSenderCollection(requestData, token);
       
       if (response.error) {
         throw new Error(response.error);
       }
 
-      // Update status of submitted cases
+      let successMessage = `ส่งข้อมูล ${selectedCases.size} เคสสำเร็จ`;
+      
+      if (response.existing_data_count > 0) {
+        successMessage += ` (พบข้อมูลเก่า ${response.existing_data_count} เคส)`;
+      }
+      
+      if (response.new_requests_count > 0) {
+        successMessage += ` (คำขอใหม่ ${response.new_requests_count} เคส)`;
+      }
+
       setAllCases(prevCases => 
         prevCases.map(caseItem => {
           if (selectedCases.has(caseItem.id)) {
-            // Update the first and third status to "done" (pending)
-            const updatedStatuses = caseItem.statuses.map((status, index) => 
-              (index === 0 || index === 2) ? { ...status, done: true } : status
+            const hasExistingData = response.existing_data?.some(
+              (item: any) => item.sender_name === caseItem.sender && item.phone_number === caseItem.phone_number
             );
-            return { ...caseItem, statuses: updatedStatuses };
+            
+            if (hasExistingData) {
+              const updatedStatuses = caseItem.statuses.map((status, index) => 
+                index <= 1 ? { ...status, done: true } : status
+              );
+              return { ...caseItem, statuses: updatedStatuses };
+            } else {
+              const updatedStatuses = caseItem.statuses.map((status, index) => 
+                index === 0 ? { ...status, done: true } : status
+              );
+              return { ...caseItem, statuses: updatedStatuses };
+            }
           }
           return caseItem;
         })
       );
 
-      setSubmitSuccess(`ส่งข้อมูล ${selectedCases.size} เคสสำเร็จ`);
-      setSelectedCases(new Set()); // Clear selection
+      setSubmitSuccess(successMessage);
+      setSelectedCases(new Set());
       
-      // Clear success message after 3 seconds
-      setTimeout(() => setSubmitSuccess(null), 3000);
+      setTimeout(() => setSubmitSuccess(null), 5000);
+
+      if (response.existing_data && response.existing_data.length > 0) {
+        console.log('ข้อมูลที่มีอยู่แล้ว:', response.existing_data);
+      }
 
     } catch (err) {
       console.error('Submit error:', err);
@@ -589,12 +531,10 @@ export default function AllDataPage() {
     }
   }, [selectedCases, allCases, session]);
 
-  // Clear selection when filters change
   useEffect(() => {
     setSelectedCases(new Set());
   }, [dateRange, period, showUnsentOnly, statusFilter, debouncedSearchTerm]);
 
-  // Pagination handlers
   const handlePageChange = useCallback((page: number) => {
     setCurrentPage(page);
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -612,14 +552,11 @@ export default function AllDataPage() {
     }
   }, [currentPage, totalPages, handlePageChange]);
 
-  // Export to Excel
   const handleExportToExcel = useCallback(() => {
     if (selectedCases.size === 0) return;
 
-    // Get selected case data
     const selectedCaseData = allCases.filter(c => selectedCases.has(c.id));
 
-    // Prepare data for Excel
     const exportData = selectedCaseData.map(caseItem => ({
       'วันที่': new Date(caseItem.date).toLocaleDateString('th-TH'),
       'Sender': caseItem.sender,
@@ -631,28 +568,17 @@ export default function AllDataPage() {
       'รายละเอียด': caseItem.details,
     }));
 
-    // Create a new workbook and worksheet
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(exportData);
-
-    // Add worksheet to workbook
     XLSX.utils.book_append_sheet(wb, ws, "รายงานเคส");
-
-    // Generate buffer
     const buf = XLSX.write(wb, { bookType: "xlsx", type: "array" });
-
-    // Create a blob from the buffer and generate a download link
     const blob = new Blob([buf], { type: "application/octet-stream" });
     const url = URL.createObjectURL(blob);
-
-    // Create a link element and click it programmatically
     const link = document.createElement("a");
     link.href = url;
     link.setAttribute("download", `รายงานเคส_${selectedCases.size}_เคส_${new Date().toLocaleString('th-TH')}.xlsx`);
     document.body.appendChild(link);
     link.click();
-
-    // Clean up
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
   }, [selectedCases, allCases]);
@@ -682,7 +608,6 @@ export default function AllDataPage() {
 
   return (
     <div className="min-h-screen bg-white px-4 py-8 flex flex-col items-center">
-      {/* Title and Filter Section - Fixed */}
       <div className="w-full max-w-6xl flex flex-col gap-4 mb-6 bg-white sticky top-0 z-10 pb-4">
         <div className="flex justify-between items-center">
           <h1 className="text-4xl font-extrabold decoration-blue-500">
@@ -699,12 +624,11 @@ export default function AllDataPage() {
         <div className="flex flex-row items-center gap-4 bg-gray-100 rounded-xl px-4 py-3 w-full">
           <span className="text-lg font-bold text-gray-700">ตัวกรอง:</span>
           
-          {/* Unsent Reports Filter Button */}
           <button
             onClick={handleUnsentToggle}
             className={`px-4 py-2 rounded-lg font-semibold border transition-all duration-200 ${
               showUnsentOnly 
-                ? 'bg-red-600 text-white border-red-700 shadow-md gra'
+                ? 'bg-red-600 text-white border-red-700 shadow-md'
                 : 'bg-white text-red-700 border-red-300 hover:bg-red-50'
             }`}
           >
@@ -713,7 +637,6 @@ export default function AllDataPage() {
           
           <span className="text-lg font-bold text-gray-700">ช่วงวันที่:</span>
           
-          {/* DatePicker Popover Button */}
           <Popover
             opened={popoverOpened}
             onChange={setPopoverOpened}
@@ -739,13 +662,11 @@ export default function AllDataPage() {
                   value={dateRange}
                   onChange={handleDateRangeChange}
                 />
-                {/* Show instruction text when only start date is selected */}
                 {dateRange[0] && !dateRange[1] && (
                   <div className="text-sm text-blue-600 mt-2 text-center">
                     กรุณาเลือกวันที่สิ้นสุด
                   </div>
                 )}
-                {/* Manual close button if needed */}
                 <div className="flex justify-end mt-2">
                   <button
                     onClick={() => setPopoverOpened(false)}
@@ -758,7 +679,6 @@ export default function AllDataPage() {
             </Popover.Dropdown>
           </Popover>
 
-          {/* Clear All Filters Button */}
           {((dateRange[0] || dateRange[1]) || showUnsentOnly || period !== 'all' || statusFilter !== 'none') && (
             <button
               onClick={() => {
@@ -774,7 +694,6 @@ export default function AllDataPage() {
             </button>
           )}
 
-          {/* Period Filter Buttons */}
           <div className="flex gap-2 ml-auto">
             {[
               { key: 'all', label: 'ทั้งหมด' },
@@ -792,39 +711,37 @@ export default function AllDataPage() {
                 onClick={() => handlePeriodChange(key as 'all' | 'daily' | 'weekly' | 'monthly')}
               >
                 {label}
-             </button>
+              </button>
             ))}
           </div>
         </div>
 
-            {/* [NEW] Status Filter Buttons Section */}
-<div className="flex flex-wrap items-center gap-4 mt-2">
-  <button
-    className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
-      statusFilter === 'none' 
-        ? 'bg-gray-600 text-white border-gray-700' 
-        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-    }`}
-    onClick={() => handleStatusFilterChange('none')}
-  >
-    ทั้งหมด
-  </button>
-  {STATUS_ORDER.map(({ key, label }) => (
-    <button
-      key={key}
-      className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
-        statusFilter === key 
-          ? 'bg-purple-600 text-white border-purple-700' // สีม่วงสำหรับสถานะที่เลือก
-          : 'bg-white text-purple-700 border-purple-300 hover:bg-purple-50'
-      }`}
-      onClick={() => handleStatusFilterChange(key)}
-    >
-      {label}
-    </button>
-  ))}
-</div>
+        <div className="flex flex-wrap items-center gap-4 mt-2">
+          <button
+            className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
+              statusFilter === 'none' 
+                ? 'bg-gray-600 text-white border-gray-700' 
+                : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+            }`}
+            onClick={() => handleStatusFilterChange('none')}
+          >
+            ทั้งหมด
+          </button>
+          {STATUS_ORDER.map(({ key, label }) => (
+            <button
+              key={key}
+              className={`px-4 py-2 rounded-lg font-semibold border transition-colors ${
+                statusFilter === key 
+                  ? 'bg-purple-600 text-white border-purple-700'
+                  : 'bg-white text-purple-700 border-purple-300 hover:bg-purple-50'
+              }`}
+              onClick={() => handleStatusFilterChange(key)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-        {/* Search Input */}
         <div className="relative">
           <FloatingLabelInput
             label="ค้นหาข้อมูล"
@@ -839,11 +756,10 @@ export default function AllDataPage() {
             </div>
           )}
         </div>
-        {/* Selection and Submit Section */}
+
         {filteredCases.length > 0 && (
           <div className="flex flex-row items-center gap-4 bg-gray-50 rounded-xl px-4 py-3 w-full">
             <div className="flex items-center gap-4">
-              {/* Select All Checkbox */}
               <button
                 onClick={handleSelectAllToggle}
                 className={`flex items-center space-x-3 px-6 py-3 rounded-xl font-semibold transition-all duration-200 ${
@@ -858,7 +774,6 @@ export default function AllDataPage() {
                   ({filteredCases.length} เคสทั้งหมด)
                 </span>
               </button>
-              {/* Selection summary right of Select All */}
               {selectedCases.size > 0 && (
                 <div className="bg-gradient-to-r from-green-50 to-emerald-50 px-4 py-2 rounded-xl border border-green-200">
                   <span className="text-green-800 font-semibold">
@@ -868,7 +783,6 @@ export default function AllDataPage() {
               )}
             </div>
 
-            {/* Export and Submit Buttons */}
             <div className="flex items-center gap-2 ml-auto">
               {submitSuccess && (
                 <span className="text-green-600 font-semibold text-sm">
@@ -880,7 +794,6 @@ export default function AllDataPage() {
                   ✗ {submitError}
                 </span>
               )}
-              {/* Export Button */}
               <button
                 onClick={handleExportToExcel}
                 disabled={selectedCases.size === 0}
@@ -893,13 +806,12 @@ export default function AllDataPage() {
                 <Download className="w-4 h-4" />
                 {selectedCases.size > 0 ? `ส่งออก Excel (${selectedCases.size})` : 'ส่งออก Excel'}
               </button>
-              {/* Submit Button */}
               <button
                 onClick={handleSubmit}
                 disabled={selectedCases.size === 0 || isSubmitting}
                 className={`flex items-center space-x-3 px-8 py-3 rounded-xl font-semibold transition-all duration-200 shadow-lg ${
                   selectedCases.size > 0 || isSubmitting
-                    ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emeral-700 text-white shadow-green-200 hover:shadow-green-300 transform hover:scale-105'
+                    ? 'bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white shadow-green-200 hover:shadow-green-300 transform hover:scale-105'
                     : 'bg-gray-300 text-gray-500 cursor-not-allowed shadow-gray-200'
                 }`}
               >
@@ -916,7 +828,6 @@ export default function AllDataPage() {
           </div>
         )}
 
-        {/* Results Summary */}
         <div className="flex justify-between items-center text-sm text-gray-600">
           <div>
             แสดงผล {paginatedCases.length} จาก {filteredCases.length} รายการที่กรอง ({allCases.length} รายการทั้งหมด)
@@ -941,16 +852,11 @@ export default function AllDataPage() {
           )}
         </div>
 
-        {/* Pagination Info and Controls */}
         {totalPages > 1 && (
           <div className="flex justify-between items-center text-sm text-gray-600 bg-gray-50 rounded-lg px-4 py-2">
             <div>
               หน้า {currentPage} จาก {totalPages} หน้า | แสดง {((currentPage - 1) * itemsPerPage) + 1}-{Math.min(currentPage * itemsPerPage, filteredCases.length)} จาก {filteredCases.length} รายการ
             </div>
-
-            
-            
-            {/* Top Pagination Controls */}
             <div className="flex items-center gap-2">
               <button
                 onClick={handlePreviousPage}
@@ -963,8 +869,6 @@ export default function AllDataPage() {
               >
                 ก่อนหน้า
               </button>
-
-              {/* Compact Page Numbers */}
               <div className="flex gap-1">
                 {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
                   let pageNum;
@@ -977,7 +881,6 @@ export default function AllDataPage() {
                   } else {
                     pageNum = currentPage - 2 + i;
                   }
-
                   return (
                     <button
                       key={pageNum}
@@ -993,7 +896,6 @@ export default function AllDataPage() {
                   );
                 })}
               </div>
-
               <button
                 onClick={handleNextPage}
                 disabled={currentPage === totalPages}
@@ -1008,10 +910,8 @@ export default function AllDataPage() {
             </div>
           </div>
         )}
-        
       </div>
 
-      {/* Optimized Cards Section with Pagination */}
       <div className="w-full max-w-6xl flex-1 min-h-[600px]">
         {filteredCases.length === 0 ? (
           <div className="text-center text-gray-500 text-xl py-12">
@@ -1032,7 +932,6 @@ export default function AllDataPage() {
           </div>
         ) : (
           <>
-            {/* Cards Grid */}
             <div className="space-y-4 mb-6">
               {paginatedCases.map((caseItem) => (
                 <CaseCard
@@ -1044,8 +943,6 @@ export default function AllDataPage() {
                 />
               ))}
             </div>
-
-            {/* Pagination Controls */}
             {totalPages > 1 && (
               <div className="flex justify-center items-center gap-4 mt-8 pb-8">
                 <button
@@ -1059,8 +956,6 @@ export default function AllDataPage() {
                 >
                   ก่อนหน้า
                 </button>
-
-                {/* Page Numbers */}
                 <div className="flex gap-2">
                   {Array.from({ length: Math.min(10, totalPages) }, (_, i) => {
                     let pageNum;
@@ -1073,7 +968,6 @@ export default function AllDataPage() {
                     } else {
                       pageNum = currentPage - 4 + i;
                     }
-
                     return (
                       <button
                         key={pageNum}
@@ -1089,7 +983,6 @@ export default function AllDataPage() {
                     );
                   })}
                 </div>
-
                 <button
                   onClick={handleNextPage}
                   disabled={currentPage === totalPages}
@@ -1107,11 +1000,9 @@ export default function AllDataPage() {
         )}
       </div>
 
-      {/* Modal */}
       {selectedCase && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-5xl w-full max-h-[90vh] overflow-y-auto relative">
-            {/* Close Button */}
             <button
               className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 bg-gray-100 hover:bg-gray-200 rounded-full w-10 h-10 flex items-center justify-center transition-colors z-10"
               onClick={handleModalClose}
@@ -1121,7 +1012,6 @@ export default function AllDataPage() {
             </button>
             
             <div className="p-8 flex flex-col lg:flex-row gap-8">
-              {/* Left Column: Main Info */}
               <div className="flex-1">
                 <h2 className="text-2xl font-bold mb-6 text-gray-800">รายละเอียดเคส</h2>
                 <div className="space-y-3">
@@ -1144,7 +1034,6 @@ export default function AllDataPage() {
                 </div>
               </div>
               
-              {/* Right Column: Additional Details */}
               <div className="flex-1 border-l border-gray-200 pl-8">
                 <h3 className="text-xl font-bold mb-4 text-gray-800">ข้อมูลเพิ่มเติม</h3>
                 <div className="text-gray-700 whitespace-pre-line text-sm leading-relaxed mb-6">
@@ -1161,6 +1050,7 @@ export default function AllDataPage() {
                           <span className={`ml-2 px-2 py-1 rounded text-xs ${
                             req.status === 'completed' ? 'bg-green-100 text-green-800' :
                             req.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                            req.status === 'completed_from_existing' ? 'bg-blue-100 text-blue-800' :
                             'bg-gray-100 text-gray-800'
                           }`}>
                             {req.status}
