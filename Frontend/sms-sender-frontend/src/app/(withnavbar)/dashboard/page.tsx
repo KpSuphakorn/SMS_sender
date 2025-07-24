@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Pie, Bar } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -16,12 +16,14 @@ import '@mantine/core/styles.css';
 
 ChartJS.register(ArcElement, Tooltip, Legend, BarElement, CategoryScale, LinearScale);
 
+// ใช้ interfaces ที่คุณมีอยู่
 interface CaseData {
-  senderName: string;
-  caseId?: string;
-  network: string;
-  status: string;
-  reportDate: string;
+  sender_name: string;
+  phone_number: string;
+  mobile_provider: string;
+  status: Array<{ name: string; updated_at: string }>;
+  latest_request_status: string;
+  reportDate?: string;
   amount: number;
   assignedTo?: string;
   approvedBy?: string;
@@ -37,73 +39,125 @@ interface NetworkData {
   avgResponseTime: number;
 }
 
+interface SummaryData {
+  totalCases: number;
+  totalWaitingApproval: number;
+  totalDataReceived: number;
+  totalSuspended: number;
+}
+
+interface DailyNewCasesData {
+  labels: string[];
+  data: number[];
+}
+
 export default function Dashboard() {
-  // State
-  const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [highValueFilter, setHighValueFilter] = useState<boolean>(false);
-  const [overdueFilter, setOverdueFilter] = useState<"waiting_3days" | "sent_7days" | null>(null);
+  // State: ลบ state ที่เกี่ยวข้องกับการโต้ตอบของผู้ใช้ออก
+  // const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null); // ลบออก
+  // const [selectedDate, setSelectedDate] = useState<string | null>(null); // ลบออก
 
-  // Data
-  const cases: CaseData[] = [
-    { senderName: "0812345678", caseId: "CASE112", network: "AIS", status: "waiting_approval", reportDate: "2025-06-24", amount: 5000, assignedTo: "นาย ก", isRecurring: true },
-    { senderName: "0891234567", network: "DTAC", status: "sent_to_nbtc", reportDate: "2025-06-24", amount: 3000, assignedTo: "นาง ข", approvedBy: "ผบ.สมชาย" },
-    { senderName: "0801234567", caseId: "CASE115", network: "TRUE", status: "data_received", reportDate: "2025-06-23", amount: 8000, assignedTo: "นาย ค", approvedBy: "ผบ.สมชาย" },
-    { senderName: "0812345678", caseId: "CASE112", network: "AIS", status: "sent_to_nbtc", reportDate: "2025-06-22", amount: 12000, assignedTo: "นาย ก", approvedBy: "ผบ.สมชาย", isRecurring: true },
-    { senderName: "0876543210", network: "TRUE", status: "waiting_approval", reportDate: "2025-06-25", amount: 15000, assignedTo: "นาง ง" },
-    { senderName: "0898765432", caseId: "CASE118", network: "DTAC", status: "data_received", reportDate: "2025-06-21", amount: 7500, assignedTo: "นาย จ", approvedBy: "ผบ.วิชาญ" }
-  ];
-
-  const networks: NetworkData[] = [
-    { name: "AIS", totalCases: 150, waitingApproval: 45, sentToNbtc: 23, dataReceived: 70, avgResponseTime: 3.2 },
-    { name: "DTAC", totalCases: 120, waitingApproval: 35, sentToNbtc: 18, dataReceived: 59, avgResponseTime: 4.1 },
-    { name: "TRUE", totalCases: 130, waitingApproval: 40, sentToNbtc: 20, dataReceived: 60, avgResponseTime: 2.8 },
-  ];
-
-  // Filter logic
-  const filteredCases = cases.filter(case_ => {
-    const caseDate = new Date(case_.reportDate);
-    const networkMatch = selectedNetwork ? case_.network === selectedNetwork : true;
-    const statusMatch = statusFilter === "all" ? true : case_.status === statusFilter;
-    const highValueMatch = highValueFilter ? case_.amount >= 10000 : true;
-    const overdueMatch = overdueFilter
-      ? (overdueFilter === "waiting_3days" && case_.status === "waiting_approval" &&
-         new Date().getTime() - caseDate.getTime() > 3 * 24 * 60 * 60 * 1000) ||
-        (overdueFilter === "sent_7days" && case_.status === "sent_to_nbtc" &&
-         new Date().getTime() - caseDate.getTime() > 7 * 24 * 60 * 60 * 1000)
-      : true;
-    return networkMatch && statusMatch && highValueMatch && overdueMatch;
+  // State สำหรับข้อมูลจริงที่ดึงจาก Backend
+  const [cases, setCases] = useState<CaseData[]>([]);
+  const [networks, setNetworks] = useState<NetworkData[]>([]);
+  const [summary, setSummary] = useState<SummaryData>({
+    totalCases: 0,
+    totalWaitingApproval: 0,
+    totalDataReceived: 0,
+    totalSuspended: 0,
+  });
+  const [dailyNewCasesData, setDailyNewCasesData] = useState<DailyNewCasesData>({
+    labels: [],
+    data: [],
   });
 
-  // Summary
-  const totalCases = filteredCases.length;
-  const totalWaiting = filteredCases.filter(c => c.status === 'waiting_approval').length;
-  const totalSent = filteredCases.filter(c => c.status === 'sent_to_nbtc').length;
-  const totalReceived = filteredCases.filter(c => c.status === 'data_received').length;
-  const highValueCases = filteredCases.filter(c => c.amount >= 10000).length;
-  const dailyLoss = filteredCases.reduce((sum, c) => sum + c.amount, 0);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // API Base URL (ตรวจสอบให้แน่ใจว่าตรงกับที่ FastAPI รันอยู่)
+  const API_BASE_URL = "http://localhost:8000/api";
+
+  // ฟังก์ชันสำหรับดึงข้อมูล
+  // ลบ dependency ที่เกี่ยวกับการโต้ตอบของผู้ใช้ออก
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // ดึงข้อมูล Summary
+      const summaryRes = await fetch(`${API_BASE_URL}/dashboard/summary`);
+      if (!summaryRes.ok) throw new Error(`HTTP error! status: ${summaryRes.status}`);
+      const summaryData: SummaryData = await summaryRes.json();
+      setSummary(summaryData);
+
+      // ดึงข้อมูล Network Distribution
+      const networkRes = await fetch(`${API_BASE_URL}/dashboard/network-distribution`);
+      if (!networkRes.ok) throw new Error(`HTTP error! status: ${networkRes.status}`);
+      const networkData: NetworkData[] = await networkRes.json();
+      setNetworks(networkData);
+
+      // ดึงข้อมูล Daily New Cases
+      const dailyRes = await fetch(`${API_BASE_URL}/dashboard/daily-new-cases`);
+      if (!dailyRes.ok) throw new Error(`HTTP error! status: ${dailyRes.status}`);
+      const dailyData: DailyNewCasesData = await dailyRes.json();
+      setDailyNewCasesData(dailyData);
+
+      // ดึงข้อมูล Cases (ไม่มี filter จาก UI แล้ว)
+      // ลบ params.append สำหรับ selected_network, statusFilter, highValueFilter, overdueFilter ออกทั้งหมด
+      const casesRes = await fetch(`${API_BASE_URL}/dashboard/cases`);
+      if (!casesRes.ok) throw new Error(`HTTP error! status: ${casesRes.status}`);
+      const casesData: CaseData[] = await casesRes.json();
+      setCases(casesData);
+
+    } catch (err: any) {
+      setError(`Failed to fetch data: ${err.message}`);
+      console.error("Fetch error:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, []); // <<< Dependency array ว่างเปล่า เพื่อให้ fetch ข้อมูลแค่ครั้งเดียวเมื่อ component mount
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  // Summary (ใช้ข้อมูลจาก `summary` state)
+  const totalCases = summary.totalCases;
+  const totalWaiting = summary.totalWaitingApproval;
+  const totalReceived = summary.totalDataReceived;
+  const totalSuspended = summary.totalSuspended;
+  // highValueCases และ dailyLoss จะยังคง filter ใน frontend เพราะ Backend ไม่ได้มี endpoint สำหรับ filter นี้
+  const highValueCases = cases.filter(c => c.amount >= 10000).length;
+  const dailyLoss = cases.reduce((sum, c) => sum + c.amount, 0);
 
   // Chart data
-  const filteredNetworks = selectedNetwork ? networks.filter(n => n.name === selectedNetwork) : networks;
+  const NETWORK_COLORS: Record<string, string> = {
+    "AIS": "#59cc33",
+    "DTAC": "#47afd1",
+    "TRUE": "#FF0000",
+    "NT": "#ffff4d", // เพิ่ม NT หรือเครือข่ายอื่นๆ ได้
+  };
+
   const getNetworkColors = (nets: NetworkData[]) =>
-    nets.map(n => n.name === 'AIS' ? "#4B5EFC" : n.name === 'DTAC' ? "#10B981" : n.name === 'TRUE' ? "#F59E0B" : "#EF4444");
+    nets.map(n => {
+      // แปลงชื่อเป็นตัวพิมพ์ใหญ่หมดเพื่อกันสะกดผิด
+      const key = n.name?.toUpperCase?.() || "";
+      return NETWORK_COLORS[key] || "#EF4444"; // fallback สีแดงถ้าไม่รู้จัก
+    });
 
   const networkDistribution = {
-    labels: filteredNetworks.map(n => n.name),
+    labels: networks.map(n => n.name), // ใช้ networks ตรงๆ
     datasets: [{
-      data: filteredNetworks.map(n => n.totalCases),
-      backgroundColor: getNetworkColors(filteredNetworks),
+      data: networks.map(n => n.totalCases), // ใช้ networks ตรงๆ
+      backgroundColor: getNetworkColors(networks), // ใช้ networks ตรงๆ
       borderColor: "#FFFFFF",
       borderWidth: 2,
     }],
   };
 
-  const dailyNewCases = {
-    labels: ["จ", "อ", "พ", "พฤ", "ศ", "ส", "อา"],
+  const dailyNewCasesChartData = {
+    labels: dailyNewCasesData.labels,
     datasets: [{
       label: "เคสใหม่",
-      data: [45, 52, 48, 61, 55, 67, 58],
+      data: dailyNewCasesData.data,
       backgroundColor: "#4B5EFC",
       borderRadius: 6,
     }],
@@ -125,85 +179,88 @@ export default function Dashboard() {
     },
   };
 
+  // ลบ onClick handlers ออกจาก chart options เพื่อไม่ให้มีปฏิสัมพันธ์
   const pieOptions = {
     ...chartOptions,
-    onClick: (event: any, elements: any) => {
-      if (elements.length > 0) {
-        const index = elements[0].index;
-        const networkName = filteredNetworks[index]?.name;
-        setSelectedNetwork(selectedNetwork === networkName ? null : networkName);
-      }
-    },
+    // onClick: (event: any, elements: any) => { ... } // ลบออก
   };
 
   const barOptions = {
     ...chartOptions,
-    onClick: (event: any, elements: any) => {
-      if (elements.length > 0) {
-        const index = elements[0].index;
-        setSelectedDate(index.toString());
+    scales: {
+      y: {
+        beginAtZero: true,
+        ticks: {
+          stepSize: 1,
+          precision: 0,
+          callback: function(value: number | string) {
+            return Number(value).toFixed(0);
+          }
+        }
       }
-    },
+    }
   };
 
   // UI
+  // ก่อน return UI
+  console.log("dailyNewCasesData", dailyNewCasesData);
+  console.log("Bar chart data", dailyNewCasesChartData);
   return (
     <MantineProvider>
       <div className="min-h-screen bg-gray-50 p-6">
-        {/* Header */}
+        {/* Header: ลบส่วนแสดงข้อมูล selectedNetwork และปุ่ม "ดูทั้งหมด" */}
         <header className="flex flex-col md:flex-row justify-between items-center mb-8 gap-4">
           <div>
             <h1 className="text-4xl font-bold text-gray-900 mb-2">DASHBOARD</h1>
-            {selectedNetwork && (
-              <p className="text-lg text-gray-600">
-                แสดงข้อมูล: {selectedNetwork}
-                <button
-                  onClick={() => setSelectedNetwork(null)}
-                  className="ml-2 text-blue-600 hover:text-blue-800 underline"
-                >
-                  (ดูทั้งหมด)
-                </button>
-              </p>
-            )}
+            {/* {selectedNetwork && ( ... )} // ลบออก */}
           </div>
+          {/* ลบ Filter controls div ออกทั้งหมด */}
         </header>
 
-        {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
-          <div className="bg-white border-l-4 border-blue-500 p-4 rounded-lg shadow flex flex-col items-center">
-            <div className="text-blue-500 text-2xl mb-2">📊</div>
-            <div className="text-sm text-gray-600 mb-1">เคสทั้งหมด</div>
-            <div className="text-2xl font-bold text-gray-900">{totalCases}</div>
-          </div>
-          <div className="bg-white border-l-4 border-yellow-500 p-4 rounded-lg shadow flex flex-col items-center">
-            <div className="text-yellow-500 text-2xl mb-2">⏳</div>
-            <div className="text-sm text-gray-600 mb-1">รออนุมัติ</div>
-            <div className="text-2xl font-bold text-gray-900">{totalWaiting}</div>
-          </div>
-          <div className="bg-white border-l-4 border-green-500 p-4 rounded-lg shadow flex flex-col items-center">
-            <div className="text-green-500 text-2xl mb-2">✅</div>
-            <div className="text-sm text-gray-600 mb-1">ได้รับข้อมูลแล้ว</div>
-            <div className="text-2xl font-bold text-gray-900">{totalReceived}</div>
-          </div>
-        </div>
+        {loading && <div className="text-center text-gray-600 text-xl">กำลังโหลดข้อมูล...</div>}
+        {error && <div className="text-center text-red-600 text-xl">เกิดข้อผิดพลาด: {error}</div>}
 
-        {/* Charts */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <h2 className="text-lg font-semibold text-gray-800 mb-4">
-              การแจกแจงตามเครือข่าย {selectedNetwork && `(${selectedNetwork})`}
-            </h2>
-            <div className="h-64">
-              <Pie data={networkDistribution} options={pieOptions} />
+        {!loading && !error && (
+          <>
+            {/* Summary Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+              <div className="bg-white border-l-4 border-blue-500 p-4 rounded-lg shadow flex flex-col items-center">
+                <div className="text-blue-500 text-2xl mb-2">📊</div>
+                <div className="text-sm text-gray-600 mb-1">เคสทั้งหมด</div>
+                <div className="text-2xl font-bold text-gray-900">{totalCases}</div>
+              </div>
+              <div className="bg-white border-l-4 border-red-500 p-4 rounded-lg shadow flex flex-col items-center">
+                <div className="text-yellow-500 text-2xl mb-2">⛔</div>
+                <div className="text-sm text-gray-600 mb-1">ระงับแล้ว</div>
+                <div className="text-2xl font-bold text-gray-900">{totalSuspended}</div>
+              </div>
+              <div className="bg-white border-l-4 border-green-500 p-4 rounded-lg shadow flex flex-col items-center">
+                <div className="text-green-500 text-2xl mb-2">✅</div>
+                <div className="text-sm text-gray-600 mb-1">ได้รับข้อมูลแล้ว</div>
+                <div className="text-2xl font-bold text-gray-900">{totalReceived}</div>
+              </div>
             </div>
-          </div>
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <h2 className="text-lg font-semibold text-gray-800 mb-4">เคสใหม่ต่อวัน</h2>
-            <div className="h-64">
-              <Bar data={dailyNewCases} options={barOptions} />
+
+            {/* Charts */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+              <div className="bg-white p-6 rounded-xl shadow-lg">
+                <h2 className="text-lg font-semibold text-gray-800 mb-4">
+                  การแจกแจงตามเครือข่าย
+                </h2>
+                <div className="h-64">
+                  {/* ไม่ต้องมี selectedNetwork ในหัวข้อแล้ว */}
+                  <Pie data={networkDistribution} options={pieOptions} />
+                </div>
+              </div>
+              <div className="bg-white p-6 rounded-xl shadow-lg">
+                <h2 className="text-lg font-semibold text-gray-800 mb-4">เคสใหม่ต่อวัน</h2>
+                <div className="h-64">
+                  <Bar data={dailyNewCasesChartData} options={barOptions} />
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
+          </>
+        )}
       </div>
     </MantineProvider>
   );

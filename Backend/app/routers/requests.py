@@ -14,8 +14,12 @@ from app.models.pending_requests import pending_requests_collection
 from bson.objectid import ObjectId
 import random
 from fastapi.responses import FileResponse
+from collections import defaultdict
+import pytz
 
 router = APIRouter()
+
+THAILAND_TZ = pytz.timezone('Asia/Bangkok')
 
 @router.post("/store-sender-collection")
 async def store_sender_collection(data: SenderRequest, current_user: dict = Depends(get_current_user)):
@@ -576,3 +580,169 @@ def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
         return FileResponse(temp_path, media_type=media_type, filename=file_obj.filename)
     except:
         raise HTTPException(status_code=404, detail="ไม่พบไฟล์")
+    
+@router.get("/dashboard/summary")
+async def get_dashboard_summary(): # <<< ไม่มี Dependency current_user
+    sender_names = sender_names_collection()
+    
+    total_cases = sender_names.count_documents({})
+    
+    # นับเคสที่รออนุมัติ (waiting_approval)
+    waiting_approval_count = sender_names.count_documents({
+        "status.name": "pending" # ใช้ "pending" ตามสถานะใน format_sender_doc
+    })
+    
+    # นับเคสที่ได้รับข้อมูลแล้ว (data_received)
+    data_received_count = sender_names.count_documents({
+        "status.name": "received"
+    })
+
+    # นับเคสที่ระงับแล้ว (suspended)
+    suspended_count = sender_names.count_documents({
+        "status.name": "suspended"
+    })
+
+    return {
+        "totalCases": total_cases,
+        "totalWaitingApproval": waiting_approval_count,
+        "totalDataReceived": data_received_count,
+        "totalSuspended": suspended_count or 0
+    }
+
+@router.get("/dashboard/network-distribution")
+async def get_network_distribution(): # <<< ไม่มี Dependency current_user
+    sender_names = sender_names_collection()
+    
+    # Aggregate เพื่อดึงจำนวนเคสตาม mobile_provider
+    pipeline = [
+        {"$group": {"_id": "$mobile_provider", "totalCases": {"$sum": 1}}},
+        {"$project": {"name": "$_id", "totalCases": 1, "_id": 0}}
+    ]
+    
+    network_data = list(sender_names.aggregate(pipeline))
+    
+    final_network_data = []
+    # known_networks = ["AIS", "DTAC", "TRUE"] # <<< ลบออก
+
+    for net in network_data:
+        # name = net["name"] if net["name"] in known_networks else "Other" # <<< ลบออก
+        name = net["name"] # <<< ใช้ชื่อ Telco จริงๆ จากฐานข้อมูล
+
+        # ค้นหาข้อมูลเดิมจาก networks array ใน Frontend เพื่อให้ค่าอื่นๆ ตรงกัน
+        # ถ้าไม่มีข้อมูลเดิม, ให้ค่าเริ่มต้นไปก่อน
+        # ส่วนนี้ยังคงใช้ mock data สำหรับ waitingApproval, sentToNbtc, dataReceived, avgResponseTime
+        # เนื่องจากคำขอระบุแค่ "Actual Telco" สำหรับชื่อ
+        mock_entry = next((n for n in [
+            {"name": "AIS", "totalCases": 150, "waitingApproval": 45, "sentToNbtc": 23, "dataReceived": 70, "avgResponseTime": 3.2},
+            {"name": "DTAC", "totalCases": 120, "waitingApproval": 35, "sentToNbtc": 18, "dataReceived": 59, "avgResponseTime": 4.1},
+            {"name": "TRUE", "totalCases": 130, "waitingApproval": 40, "sentToNbtc": 20, "dataReceived": 60, "avgResponseTime": 2.8},
+        ] if n["name"] == name), None) # ใช้ 'name' ที่เป็น Actual Telco ในการหา mock_entry
+
+        final_network_data.append({
+            "name": name,
+            "totalCases": net["totalCases"],
+            "waitingApproval": mock_entry.get("waitingApproval", random.randint(10, 50)) if mock_entry else random.randint(10, 50),
+            "sentToNbtc": mock_entry.get("sentToNbtc", random.randint(5, 30)) if mock_entry else random.randint(5, 30),
+            "dataReceived": mock_entry.get("dataReceived", random.randint(20, 80)) if mock_entry else random.randint(20, 80),
+            "avgResponseTime": mock_entry.get("avgResponseTime", round(random.uniform(2.0, 5.0), 1)) if mock_entry else round(random.uniform(2.0, 5.0), 1),
+        })
+    
+    return final_network_data
+
+@router.get("/dashboard/daily-new-cases")
+async def get_daily_new_cases():
+    """
+    คืนข้อมูลจำนวนเคสใหม่ที่ถูกสร้างในแต่ละวันย้อนหลัง 6 วัน และรวมวันนี้ (รวม 7 วัน)
+    ใช้ field 'date' (string, รูปแบบ YYYY-MM-DD) ในการนับจำนวนเคสใหม่แต่ละวัน
+    """
+    sender_names = sender_names_collection()
+
+    # กำหนดวันปัจจุบัน (เวลา 00:00:00)
+    today = datetime.datetime.now(THAILAND_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+    daily_counts = {}
+    labels = []
+    data_counts = []
+
+    # วนลูปย้อนหลัง 6 วัน + วันนี้ (รวม 7 วัน)
+    for i in range(6, -1, -1):  # 6,5,4,3,2,1,0
+        date = today - datetime.timedelta(days=i)
+        date_str = date.strftime("%Y-%m-%d")
+        # Query ด้วย field 'date' (string)
+        count = sender_names.count_documents({"date": date_str})
+        daily_counts[date_str] = count
+
+    # เตรียมข้อมูลสำหรับกราฟ (เรียงจากวันเก่าสุดไปวันใหม่สุด)
+    sorted_dates = sorted(daily_counts.keys())
+    for date_str in sorted_dates:
+        labels.append(date_str)
+        data_counts.append(daily_counts[date_str])
+
+    return {
+        "labels": labels,
+        "data": data_counts
+    }
+
+@router.get("/dashboard/cases")
+async def get_filtered_cases( # <<< ไม่มี Dependency current_user
+    selected_network: Optional[str] = Query(None),
+    status_filter: str = Query("all"),
+    high_value_filter: bool = Query(False),
+    overdue_filter: Optional[str] = Query(None),
+):
+    sender_names = sender_names_collection()
+    response_from_telco = response_from_telco_collection()
+    
+    query = {}
+    
+    if selected_network:
+        query["mobile_provider"] = selected_network
+
+    if status_filter != "all":
+        query["status.name"] = status_filter
+        
+    if high_value_filter:
+        query["amount"] = {"$gte": 10000} # ต้องมี field 'amount' ใน collection ของคุณ
+
+    raw_cases = sender_names.find(query).sort("created_at", -1)
+    
+    filtered_results = []
+    today_for_overdue = datetime.datetime.now(THAILAND_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    for doc in raw_cases:
+        formatted_doc = format_sender_doc(
+            doc,
+            include_telco_data=True,
+            response_from_telco=response_from_telco,
+            include_pdf_ids=False
+        )
+        
+        # Apply overdue filter in Python
+        if overdue_filter:
+            case_date_str = doc.get("reportDate") # assuming reportDate exists and is in YYYY-MM-DD
+            if not case_date_str:
+                continue
+            
+            try:
+                # แปลง reportDate เป็น datetime object
+                case_date = datetime.datetime.strptime(case_date_str, "%Y-%m-%d").replace(tzinfo=THAILAND_TZ)
+                
+                # คำนวณความต่างของวัน
+                days_diff = (today_for_overdue - case_date).days
+                
+                is_overdue = False
+                if overdue_filter == "waiting_3days" and formatted_doc.get("latest_request_status") == "pending" and days_diff > 3:
+                    is_overdue = True
+                elif overdue_filter == "sent_7days" and formatted_doc.get("latest_request_status") == "sent_to_nbtc" and days_diff > 7:
+                    # สมมติว่ามี status "sent_to_nbtc" ใน request_ids
+                    is_overdue = True
+                
+                if not is_overdue:
+                    continue # Skip if not overdue
+            except ValueError:
+                # Handle cases where reportDate format is incorrect
+                continue
+
+        # Convert ObjectId back to string for consistency if not already done by format_sender_doc
+        filtered_results.append(convert_objectid_to_str(formatted_doc))
+        
+    return clean_nan_values(filtered_results)
