@@ -1,6 +1,8 @@
+import random
 from bson import ObjectId
 from datetime import datetime
 import math
+from fastapi import HTTPException
 import pandas as pd
 from app.models.sender_names import sender_names_collection
 from app.models.response_from_telco import response_from_telco_collection
@@ -94,3 +96,39 @@ def format_sender_doc(doc, include_telco_data=False, response_from_telco=None, i
     
     # Clean the entire base_data to ensure no NaN values
     return clean_nan_values(base_data)
+
+def generate_request_id():
+    """สร้าง request_id แบบสุ่ม 8 หลัก"""
+    while True:
+        request_id = str(random.randint(10000000, 99999999))
+        if not sender_names_collection().find_one({"request_ids.id": request_id}):
+            return request_id
+
+def check_admin(current_user):
+    """เช็คว่าเป็น admin หรือไม่"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="ต้องเป็น admin เท่านั้น")
+
+def has_received_status(doc):
+    """เช็คว่ามี received status หรือไม่"""
+    if not doc:
+        return False
+    
+    status = doc.get("status", [])
+    if is_status_object(status):
+        return any(s["name"] == "received" for s in status)
+    return "received" in status
+
+def add_status(current_status, new_status, updated_at):
+    """เพิ่ม status ใหม่"""
+    if is_status_object(current_status):
+        status_names = [s["name"] for s in current_status]
+        status_list = current_status.copy()
+    else:
+        status_names = current_status
+        status_list = [{"name": s, "updated_at": updated_at} for s in current_status]
+    
+    if new_status not in status_names:
+        status_list.append({"name": new_status, "updated_at": updated_at})
+    
+    return status_list
