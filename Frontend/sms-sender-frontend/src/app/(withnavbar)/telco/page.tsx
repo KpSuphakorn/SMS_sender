@@ -586,7 +586,7 @@ export default function TelcoPage() {
                   className="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-2"
                 >
                   <Filter className="w-4 h-4" />
-                  <span>ล้างตัวกรong</span>
+                  <span>ล้างตัวกรอง</span>
                 </button>
               </div>
               
