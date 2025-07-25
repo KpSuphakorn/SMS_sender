@@ -12,7 +12,6 @@ from app.models.sender_names import sender_names_collection
 from app.models.response_from_telco import response_from_telco_collection
 from app.models.pending_requests import pending_requests_collection
 from bson.objectid import ObjectId
-import random
 from fastapi.responses import FileResponse
 
 router = APIRouter()
@@ -216,7 +215,7 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
             sender_names.update_one(
                 {"_id": sender["sender_object_id"]},
                 {"$set": {
-                    "data_pdf_ids": {provider: data_pdf_ids.get(provider, None)},
+                    "data_pdf_id": data_pdf_ids.get(provider, None),
                     "pdf_sent_suspension_id": str(suspension_pdf_id) if suspension_pdf_id else None,
                     "updated_at": now,
                     "status": add_status(
@@ -248,7 +247,6 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
 
     file_ids = []
     excel_content = None
-    main_file_id = None
     
     for file in files:
         content = await file.read()
@@ -260,9 +258,6 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
         })
         file_ids.append(str(file_id))
         
-        if main_file_id is None:
-            main_file_id = str(file_id)
-            
         if file.filename.endswith(('.xlsx', '.xls')):
             excel_content = content
 
@@ -284,7 +279,11 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
     successful = []
     failed = []
 
-    processed_senders = set()
+    user_role = current_user.get("role", "").lower()
+    valid_providers = {"true", "dtac", "ais", "nt", "telco"}
+    if user_role not in valid_providers:
+        raise HTTPException(status_code=403, detail="ต้องมี role เป็น true, dtac, ais, nt, หรือ telco")
+
     for _, row in df.iterrows():
         try:
             sender_name = str(row[required_col]).strip()
@@ -299,33 +298,43 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
                 continue
 
             sender_doc = sender_names.find_one({"_id": sender_entry["sender_object_id"]})
-            if sender_doc:
-                now = datetime.datetime.now()
-                new_status = add_status(sender_doc.get("status", []), "received", now)
-                
-                updated_request_ids = []
-                for req in sender_doc.get("request_ids", []):
-                    if req["id"] == request_id:
-                        updated_request_ids.append({"id": req["id"], "status": "received"})
-                    else:
-                        updated_request_ids.append(req)
+            if not sender_doc:
+                failed.append(sender_name)
+                continue
 
-                sender_names.update_one(
-                    {"_id": sender_doc["_id"]},
-                    {"$set": {
-                        "status": new_status,
-                        "request_ids": updated_request_ids,
-                        "reply_file_id": main_file_id,
-                        "updated_at": now
-                    }}
-                )
+            # Check if mobile_provider matches user_role
+            excel_provider = str(row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", "unknown")).lower()
+            sender_provider = sender_doc.get("mobile_provider", "unknown").lower()
+            if excel_provider != user_role or sender_provider != user_role:
+                failed.append(f"{sender_name}: mobile_provider mismatch (Excel: {excel_provider}, Sender: {sender_provider}, Role: {user_role})")
+                continue
+
+            now = datetime.datetime.now()
+            new_status = add_status(sender_doc.get("status", []), "received", now)
+            
+            updated_request_ids = []
+            for req in sender_doc.get("request_ids", []):
+                if req["id"] == request_id:
+                    updated_request_ids.append({"id": req["id"], "status": "received"})
+                else:
+                    updated_request_ids.append(req)
+
+            sender_names.update_one(
+                {"_id": sender_doc["_id"]},
+                {"$set": {
+                    "status": new_status,
+                    "request_ids": updated_request_ids,
+                    "all_reply_file_ids": file_ids,  # เปลี่ยนจาก reply_file_id เป็น all_reply_file_ids
+                    "updated_at": now
+                }}
+            )
 
             telco_data = {
                 "request_id": request_id,
                 "sender_name": sender_name,
                 "phone_number": sender_doc.get("phone_number", ""),
                 "sender_object_id": sender_entry["sender_object_id"],
-                "mobile_provider": row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", sender_doc.get("mobile_provider", "unknown")).lower(),
+                "mobile_provider": excel_provider,
                 "full_name": row.get("ชื่อสกุลผู้จดทะเบียน", sender_doc.get("full_name")),
                 "date": row.get("วันที่จดทะเบียนเบอร์", sender_doc.get("date")),
                 "sim_type": row.get("ประเภทซิม"),
@@ -338,8 +347,7 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
                 "case_id": row.get("case ID NO"),
                 "contact_info": row.get("ข้อมูลการติดต่อ"),
                 "note": row.get("Note"),
-                "reply_file_id": main_file_id,
-                "all_reply_file_ids": file_ids,
+                "all_reply_file_ids": file_ids,  # เปลี่ยนจาก reply_file_id เป็น all_reply_file_ids
                 "created_at": now,
                 "updated_at": now,
                 "created_by": current_user["id"]
@@ -352,48 +360,9 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
             )
             
             successful.append(sender_name)
-            processed_senders.add(sender_name)
             
         except Exception as e:
             failed.append(f"{sender_name}: {str(e)}")
-
-    # Update remaining senders in the request to mark as processed if not in Excel
-    for sender in pending_doc.get("senders", []):
-        if sender["sender_name"] not in processed_senders:
-            sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
-            if sender_doc and not (has_received_status(sender_doc) or sender_doc.get("reply_file_id")):
-                updated_request_ids = [
-                    {"id": req["id"], "status": "received" if req["id"] == request_id else req["status"]}
-                    for req in sender_doc.get("request_ids", [])
-                ]
-                sender_names.update_one(
-                    {"_id": sender["sender_object_id"]},
-                    {"$set": {
-                        "status": add_status(sender_doc.get("status", []), "received", now),
-                        "request_ids": updated_request_ids,
-                        "reply_file_id": main_file_id,
-                        "updated_at": now
-                    }}
-                )
-                response_from_telco.update_one(
-                    {"request_id": request_id, "sender_name": sender["sender_name"]},
-                    {"$set": {
-                        "request_id": request_id,
-                        "sender_name": sender["sender_name"],
-                        "phone_number": sender["phone_number"],
-                        "sender_object_id": sender["sender_object_id"],
-                        "mobile_provider": sender_doc.get("mobile_provider", "unknown").lower(),
-                        "full_name": sender_doc.get("full_name"),
-                        "date": sender_doc.get("date"),
-                        "reply_file_id": main_file_id,
-                        "all_reply_file_ids": file_ids,
-                        "created_at": now,
-                        "updated_at": now,
-                        "created_by": current_user["id"],
-                        "note": "Auto-marked as received due to partial response"
-                    }},
-                    upsert=True
-                )
 
     return {
         "message": f"ประมวลผล ISP response สำเร็จ",
@@ -458,8 +427,7 @@ async def get_isp_pending_senders(current_user: dict = Depends(get_current_user)
                     include_pdf_ids=True
                 )
                 formatted_doc["request_id"] = request_id
-                data_pdf_ids = sender_doc.get("data_pdf_ids", {})
-                formatted_doc["data_pdf_id"] = data_pdf_ids.get(user_role, None)
+                formatted_doc["data_pdf_id"] = sender_doc.get("data_pdf_id", None)
                 formatted_doc["is_response_submitted"] = bool(sender_doc.get("reply_file_id"))
                 results_by_request_id[request_id].append(formatted_doc)
     
