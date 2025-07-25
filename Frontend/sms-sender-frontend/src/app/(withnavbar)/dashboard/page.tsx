@@ -74,7 +74,7 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
 
   // API Base URL (ตรวจสอบให้แน่ใจว่าตรงกับที่ FastAPI รันอยู่)
-  const API_BASE_URL = "http://localhost:8000/api";
+  const API_BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
 
   // ฟังก์ชันสำหรับดึงข้อมูล
   // ลบ dependency ที่เกี่ยวกับการโต้ตอบของผู้ใช้ออก
@@ -83,26 +83,26 @@ export default function Dashboard() {
     setError(null);
     try {
       // ดึงข้อมูล Summary
-      const summaryRes = await fetch(`${API_BASE_URL}/dashboard/summary`);
+      const summaryRes = await fetch(`${API_BASE_URL}/api/dashboard/summary`);
       if (!summaryRes.ok) throw new Error(`HTTP error! status: ${summaryRes.status}`);
       const summaryData: SummaryData = await summaryRes.json();
       setSummary(summaryData);
 
       // ดึงข้อมูล Network Distribution
-      const networkRes = await fetch(`${API_BASE_URL}/dashboard/network-distribution`);
+      const networkRes = await fetch(`${API_BASE_URL}/api/dashboard/network-distribution`);
       if (!networkRes.ok) throw new Error(`HTTP error! status: ${networkRes.status}`);
       const networkData: NetworkData[] = await networkRes.json();
       setNetworks(networkData);
 
       // ดึงข้อมูล Daily New Cases
-      const dailyRes = await fetch(`${API_BASE_URL}/dashboard/daily-new-cases`);
+      const dailyRes = await fetch(`${API_BASE_URL}/api/dashboard/daily-new-cases`);
       if (!dailyRes.ok) throw new Error(`HTTP error! status: ${dailyRes.status}`);
       const dailyData: DailyNewCasesData = await dailyRes.json();
       setDailyNewCasesData(dailyData);
 
       // ดึงข้อมูล Cases (ไม่มี filter จาก UI แล้ว)
       // ลบ params.append สำหรับ selected_network, statusFilter, highValueFilter, overdueFilter ออกทั้งหมด
-      const casesRes = await fetch(`${API_BASE_URL}/dashboard/cases`);
+      const casesRes = await fetch(`${API_BASE_URL}/api/dashboard/cases`);
       if (!casesRes.ok) throw new Error(`HTTP error! status: ${casesRes.status}`);
       const casesData: CaseData[] = await casesRes.json();
       setCases(casesData);
@@ -203,8 +203,8 @@ export default function Dashboard() {
 
   // UI
   // ก่อน return UI
-  console.log("dailyNewCasesData", dailyNewCasesData);
-  console.log("Bar chart data", dailyNewCasesChartData);
+  // console.log("dailyNewCasesData", dailyNewCasesData);
+  // console.log("Bar chart data", dailyNewCasesChartData);
   return (
     <MantineProvider>
       <div className="min-h-screen bg-gray-50 p-6">
