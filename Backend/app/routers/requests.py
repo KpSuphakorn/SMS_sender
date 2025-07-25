@@ -27,13 +27,19 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
     sender_entries = []
     existing_data = []
 
+    valid_providers = {"true", "dtac", "ais", "nt", "telco"}
+
     for row in data.rows:
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail="ต้องมี sender_name และ phone_number")
+        mobile_provider = row.get("mobile_provider", "unknown").lower()
+        if mobile_provider != "unknown" and mobile_provider not in valid_providers:
+            raise HTTPException(status_code=400, detail=f"mobile_provider ต้องเป็นหนึ่งใน {', '.join(valid_providers)}")
 
     for row in data.rows:
         sender_name = row["sender_name"]
         phone_number = row["phone_number"]
+        mobile_provider = row.get("mobile_provider", "unknown").lower()
         
         existing_sender = sender_names.find_one(
             {"sender_name": sender_name, "phone_number": phone_number},
@@ -61,7 +67,7 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
                 sender_names.insert_one({
                     "sender_name": sender_name,
                     "phone_number": phone_number,
-                    "mobile_provider": existing_telco.get("mobile_provider", "unknown"),
+                    "mobile_provider": existing_telco.get("mobile_provider", "unknown").lower(),
                     "full_name": existing_telco.get("full_name"),
                     "date": existing_telco.get("date"),
                     "request_ids": [{"id": request_id, "status": "completed_from_existing"}],
@@ -103,7 +109,8 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
                 {"$set": {
                     "request_ids": existing_sender.get("request_ids", []) + [{"id": request_id, "status": "pending"}],
                     "updated_at": now,
-                    "status": add_status(existing_sender.get("status", []), "pending", now)
+                    "status": add_status(existing_sender.get("status", []), "pending", now),
+                    "mobile_provider": mobile_provider
                 }}
             )
             sender_object_id = existing_sender["_id"]
@@ -111,7 +118,7 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
             new_doc = {
                 "sender_name": sender_name,
                 "phone_number": phone_number,
-                "mobile_provider": row.get("mobile_provider", "unknown"),
+                "mobile_provider": mobile_provider,
                 "full_name": row.get("full_name"),
                 "date": row.get("date"),
                 "request_ids": [{"id": request_id, "status": "pending"}],
@@ -172,32 +179,48 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
         }}
     )
 
-    senders_data = []
+    senders_by_provider = {}
     for sender in pending_doc.get("senders", []):
         sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
         if sender_doc and not (has_received_status(sender_doc) or sender_doc.get("reply_file_id")):
-            senders_data.append({
+            provider = sender_doc.get("mobile_provider", "unknown").lower()
+            if provider not in senders_by_provider:
+                senders_by_provider[provider] = []
+            senders_by_provider[provider].append({
                 "sender_name": sender["sender_name"],
                 "phone_number": sender["phone_number"],
-                "mobile_provider": sender_doc.get("mobile_provider", "unknown"),
+                "mobile_provider": provider,
                 "full_name": sender_doc.get("full_name"),
                 "date": sender_doc.get("date")
             })
-    
-    if senders_data:
-        date_str = now.strftime("%d %B %Y")
-        data_pdf_id = generate_custom_pdf_and_store(senders_data, ["sender_name", "phone_number", "mobile_provider", "full_name", "date"], request_id, date_str)
-        suspension_pdf_id = generate_suspension_pdf(request_id, date_str)
 
-        for sender in pending_doc.get("senders", []):
+    data_pdf_ids = {}
+    date_str = now.strftime("%d %B %Y")
+    for provider, senders in senders_by_provider.items():
+        if senders:
+            data_pdf_id = generate_custom_pdf_and_store(
+                senders,
+                ["sender_name", "phone_number", "mobile_provider", "full_name", "date"],
+                request_id,
+                date_str,
+                provider
+            )
+            data_pdf_ids[provider] = str(data_pdf_id)
+
+    suspension_pdf_id = generate_suspension_pdf(request_id, date_str) if senders_by_provider else None
+
+    for sender in pending_doc.get("senders", []):
+        sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
+        if sender_doc and not (has_received_status(sender_doc) or sender_doc.get("reply_file_id")):
+            provider = sender_doc.get("mobile_provider", "unknown").lower()
             sender_names.update_one(
                 {"_id": sender["sender_object_id"]},
                 {"$set": {
-                    "pdf_sent_data_id": data_pdf_id,
-                    "pdf_sent_suspension_id": suspension_pdf_id,
+                    "data_pdf_ids": {provider: data_pdf_ids.get(provider, None)},
+                    "pdf_sent_suspension_id": str(suspension_pdf_id) if suspension_pdf_id else None,
                     "updated_at": now,
                     "status": add_status(
-                        sender_names.find_one({"_id": sender["sender_object_id"]}).get("status", []),
+                        sender_doc.get("status", []),
                         "suspension_requested",
                         now
                     )
@@ -206,8 +229,11 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
 
     return {
         "message": f"อนุมัติ request {request_id} สำเร็จ",
-        "data_pdf_id": str(data_pdf_id) if senders_data else None,
-        "suspension_pdf_id": str(suspension_pdf_id) if senders_data else None
+        "data_pdf_ids": data_pdf_ids,
+        "suspension_pdf_id": str(suspension_pdf_id) if suspension_pdf_id else None,
+        "senders": [
+            sender for senders in senders_by_provider.values() for sender in senders
+        ]
     }
 
 @router.post("/isp-response/{request_id}")
@@ -258,6 +284,7 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
     successful = []
     failed = []
 
+    processed_senders = set()
     for _, row in df.iterrows():
         try:
             sender_name = str(row[required_col]).strip()
@@ -298,9 +325,9 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
                 "sender_name": sender_name,
                 "phone_number": sender_doc.get("phone_number", ""),
                 "sender_object_id": sender_entry["sender_object_id"],
-                "mobile_provider": row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", "unknown"),
-                "full_name": row.get("ชื่อสกุลผู้จดทะเบียน"),
-                "date": row.get("วันที่จดทะเบียนเบอร์"),
+                "mobile_provider": row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", sender_doc.get("mobile_provider", "unknown")).lower(),
+                "full_name": row.get("ชื่อสกุลผู้จดทะเบียน", sender_doc.get("full_name")),
+                "date": row.get("วันที่จดทะเบียนเบอร์", sender_doc.get("date")),
                 "sim_type": row.get("ประเภทซิม"),
                 "registration_type": row.get("ประเภทการลงทะเบียนซิม"),
                 "imei": row.get("IMEI"),
@@ -325,9 +352,48 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
             )
             
             successful.append(sender_name)
+            processed_senders.add(sender_name)
             
         except Exception as e:
             failed.append(f"{sender_name}: {str(e)}")
+
+    # Update remaining senders in the request to mark as processed if not in Excel
+    for sender in pending_doc.get("senders", []):
+        if sender["sender_name"] not in processed_senders:
+            sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
+            if sender_doc and not (has_received_status(sender_doc) or sender_doc.get("reply_file_id")):
+                updated_request_ids = [
+                    {"id": req["id"], "status": "received" if req["id"] == request_id else req["status"]}
+                    for req in sender_doc.get("request_ids", [])
+                ]
+                sender_names.update_one(
+                    {"_id": sender["sender_object_id"]},
+                    {"$set": {
+                        "status": add_status(sender_doc.get("status", []), "received", now),
+                        "request_ids": updated_request_ids,
+                        "reply_file_id": main_file_id,
+                        "updated_at": now
+                    }}
+                )
+                response_from_telco.update_one(
+                    {"request_id": request_id, "sender_name": sender["sender_name"]},
+                    {"$set": {
+                        "request_id": request_id,
+                        "sender_name": sender["sender_name"],
+                        "phone_number": sender["phone_number"],
+                        "sender_object_id": sender["sender_object_id"],
+                        "mobile_provider": sender_doc.get("mobile_provider", "unknown").lower(),
+                        "full_name": sender_doc.get("full_name"),
+                        "date": sender_doc.get("date"),
+                        "reply_file_id": main_file_id,
+                        "all_reply_file_ids": file_ids,
+                        "created_at": now,
+                        "updated_at": now,
+                        "created_by": current_user["id"],
+                        "note": "Auto-marked as received due to partial response"
+                    }},
+                    upsert=True
+                )
 
     return {
         "message": f"ประมวลผล ISP response สำเร็จ",
@@ -337,29 +403,69 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
         "details": {"successful": successful, "failed": failed}
     }
 
-@router.get("/pending-sender/{request_id}")
-async def get_pending_sender(request_id: str, current_user: dict = Depends(get_current_user)):
+@router.get("/pending-senders")
+async def get_pending_senders(current_user: dict = Depends(get_current_user)):
+    check_admin(current_user)
     pending_requests = pending_requests_collection()
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
     
-    pending_doc = pending_requests.find_one({"request_id": request_id, "is_approved": True})
-    if not pending_doc:
-        raise HTTPException(status_code=404, detail="ไม่พบ request ที่อนุมัติแล้ว")
-
+    pending_docs = pending_requests.find({})
     results = []
-    for sender_entry in pending_doc.get("senders", []):
-        sender_doc = sender_names.find_one({"_id": sender_entry["sender_object_id"]})
-        if sender_doc:
-            formatted_doc = format_sender_doc(
-                sender_doc,
-                include_telco_data=True,
-                response_from_telco=response_from_telco,
-                include_pdf_ids=True
-            )
-            results.append(formatted_doc)
+    
+    for pending_doc in pending_docs:
+        for sender in pending_doc.get("senders", []):
+            sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
+            if sender_doc:
+                formatted_doc = format_sender_doc(
+                    sender_doc,
+                    include_telco_data=True,
+                    response_from_telco=response_from_telco,
+                    include_pdf_ids=True
+                )
+                formatted_doc["request_id"] = pending_doc["request_id"]
+                formatted_doc["is_approved"] = pending_doc.get("is_approved", False)
+                formatted_doc["is_response_submitted"] = bool(sender_doc.get("reply_file_id"))
+                results.append(formatted_doc)
 
     return clean_nan_values(results)
+
+@router.get("/isp-pending-senders")
+async def get_isp_pending_senders(current_user: dict = Depends(get_current_user)):
+    pending_requests = pending_requests_collection()
+    sender_names = sender_names_collection()
+    response_from_telco = response_from_telco_collection()
+    
+    valid_roles = {"true", "dtac", "ais", "nt", "telco"}
+    user_role = current_user.get("role", "").lower()
+    if user_role not in valid_roles:
+        raise HTTPException(status_code=403, detail="ต้องมี role เป็น true, dtac, ais, nt, หรือ telco")
+
+    pending_docs = pending_requests.find({"is_approved": True})
+    results_by_request_id = {}
+    
+    for pending_doc in pending_docs:
+        request_id = pending_doc["request_id"]
+        results_by_request_id[request_id] = []
+        
+        for sender in pending_doc.get("senders", []):
+            sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
+            if sender_doc and sender_doc.get("mobile_provider", "unknown").lower() == user_role:
+                formatted_doc = format_sender_doc(
+                    sender_doc,
+                    include_telco_data=True,
+                    response_from_telco=response_from_telco,
+                    include_pdf_ids=True
+                )
+                formatted_doc["request_id"] = request_id
+                data_pdf_ids = sender_doc.get("data_pdf_ids", {})
+                formatted_doc["data_pdf_id"] = data_pdf_ids.get(user_role, None)
+                formatted_doc["is_response_submitted"] = bool(sender_doc.get("reply_file_id"))
+                results_by_request_id[request_id].append(formatted_doc)
+    
+    results_by_request_id = {k: v for k, v in results_by_request_id.items() if v}
+    
+    return clean_nan_values(results_by_request_id)
 
 @router.post("/complete-suspension/{sender_name}")
 def complete_suspension(sender_name: str, current_user: dict = Depends(get_current_user)):

@@ -16,7 +16,7 @@ FIELD_LABELS = {
     "date": "วันที่"
 }
 
-def generate_custom_pdf_and_store(rows, fields, request_id, date_display):
+def generate_custom_pdf_and_store(rows, fields, request_id, date_display, mobile_provider):
     pdf = FPDF(orientation='L')
     pdf.add_font('THSarabunNew', '', THAI_FONT_PATH_NORMAL, uni=True)
     pdf.set_font('THSarabunNew', '', 14)
@@ -26,6 +26,7 @@ def generate_custom_pdf_and_store(rows, fields, request_id, date_display):
     col_width = page_width / len(fields) if fields else 40
 
     pdf.cell(0, 10, f"Request ID: {request_id}", 0, 1)
+    pdf.cell(0, 10, f"ค่ายมือถือ: {FIELD_LABELS.get('mobile_provider', 'ค่ายมือถือ')}: {mobile_provider}", 0, 1)
     pdf.cell(0, 10, f"วันที่: {date_display}", 0, 1)
     pdf.ln(5)
 
@@ -43,9 +44,10 @@ def generate_custom_pdf_and_store(rows, fields, request_id, date_display):
     pdf_stream = BytesIO(pdf.output(dest='S'))
     return grid_fs.put(
         pdf_stream,
-        filename=f"{request_id}_data.pdf",
+        filename=f"{request_id}_{mobile_provider}_data.pdf",
         request_id=request_id,
-        file_type="sent_data"
+        file_type="sent_data",
+        metadata={"mobile_provider": mobile_provider}
     )
 
 def generate_suspension_pdf(request_id: str, date_display, recipient="เจ้าหน้าที่ผู้เกี่ยวข้อง"):
