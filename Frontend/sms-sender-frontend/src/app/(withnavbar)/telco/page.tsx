@@ -724,22 +724,7 @@ export default function TelcoPage() {
 
                         {/* PDF Download Links */}
                         <div className="mt-4 flex flex-wrap gap-2">
-                          {record.dataPdfId && (
-                            <button
-                              onClick={() => handleDownloadPdf(record.dataPdfId!, 'data.pdf')}
-                              className="text-xs bg-blue-100 text-blue-700 px-2 py-1 rounded hover:bg-blue-200 transition-colors"
-                            >
-                              ดาวน์โหลดข้อมูล
-                            </button>
-                          )}
-                          {record.suspensionPdfId && (
-                            <button
-                              onClick={() => handleDownloadPdf(record.suspensionPdfId!, 'suspension.pdf')}
-                              className="text-xs bg-red-100 text-red-700 px-2 py-1 rounded hover:bg-red-200 transition-colors"
-                            >
-                              ดาวน์โหลดหนังสือ
-                            </button>
-                          )}
+                          
                           {record.replyFileId && (
                             <button
                               onClick={() => handleDownloadPdf(record.replyFileId!, 'reply.pdf')}
