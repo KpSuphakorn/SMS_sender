@@ -1,7 +1,9 @@
 "use client";
 import { useState, useMemo, useCallback, useEffect } from "react";
+import { useSession } from "next-auth/react";
 import { DatesRangeValue } from '@mantine/dates';
-import getAvailableSenders from "@/libs/getAvailableSenders";
+import getPendingSenders from "@/libs/getPendingSenders";
+import approveRequest from "@/libs/approveRequest";
 
 // Import types and utilities
 import { Book } from './types';
@@ -20,6 +22,8 @@ import {
 
 // Main component
 export default function SupportLetterPage() {
+  const { data: session } = useSession();
+  
   // State management
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
@@ -30,6 +34,7 @@ export default function SupportLetterPage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [popoverOpened, setPopoverOpened] = useState(false);
+  const [approvingRequests, setApprovingRequests] = useState<Set<string>>(new Set());
 
   // Helper function to map API status to display status
   const STATUS_ORDER = [
@@ -127,8 +132,12 @@ export default function SupportLetterPage() {
           fields: item.fields || [],
           request_ids: item.request_ids || [],
           reply_file_id: item.reply_file_id?.$oid || item.reply_file_id,
+          is_response_submitted: item.is_response_submitted || false, // Include response status
         };
       });
+
+      // Check if any case in this book has been responded to
+      const hasResponseSubmitted = processedCases.some(c => c.is_response_submitted);
 
       // Determine book status based on cases
       let bookStatus: 'urgent' | 'processing' | 'completed' | 'pending' = 'pending';
@@ -154,7 +163,9 @@ export default function SupportLetterPage() {
         nt: telcoCounts.nt,
         other: telcoCounts.other,
         status: bookStatus,
-        cases: processedCases
+        cases: processedCases,
+        is_response_submitted: hasResponseSubmitted, // Track if any case has been responded to
+        canApprove: !hasResponseSubmitted // Can only approve if no responses have been submitted
       };
       
       console.log(`✅ Created book:`, {
@@ -182,8 +193,14 @@ export default function SupportLetterPage() {
         setLoading(true);
         setError(null);
         
-        // Fetch all data without date restrictions
-        const data = await getAvailableSenders("", "");
+        if (!session?.user?.token) {
+          setError('ไม่พบข้อมูลการเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่');
+          setLoading(false);
+          return;
+        }
+        
+        // Fetch pending senders data (which includes is_response_submitted field)
+        const data = await getPendingSenders(session.user.token);
         console.log('📊 Raw data from API:', data);
         console.log('📊 Total cases fetched:', data.length);
         
@@ -198,6 +215,7 @@ export default function SupportLetterPage() {
         casesWithRequestIds.forEach((item: any, index: number) => {
           if (index < 3) { // Log first 3 items
             console.log(`📊 Case ${index + 1} request_ids:`, item.request_ids);
+            console.log(`📊 Case ${index + 1} is_response_submitted:`, item.is_response_submitted);
           }
         });
         
@@ -217,7 +235,7 @@ export default function SupportLetterPage() {
     };
 
     fetchData();
-  }, [processRawDataToBooks]);
+  }, [processRawDataToBooks, session?.user?.token]);
 
   // Handle date range change
   const handleDateRangeChange = useCallback((range: DatesRangeValue) => {
@@ -251,19 +269,32 @@ export default function SupportLetterPage() {
 
   // Event handlers
   const handleCheck = (id: string) => {
+    // Check if this book has response submitted
+    const book = books.find(b => b.id === id);
+    if (book?.is_response_submitted) {
+      alert('ไม่สามารถเลือกคำขอนี้ได้ เนื่องจากได้รับการตอบกลับจากผู้ให้บริการแล้ว');
+      return;
+    }
+    
     setSelected((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   };
 
   const handleSelectAll = () => {
-    const filteredBookIds = filteredBooks.map(book => book.id);
-    const allFilteredSelected = filteredBookIds.every(id => selected.includes(id));
+    // Only include books that don't have responses submitted
+    const selectableBookIds = filteredBooks
+      .filter(book => !book.is_response_submitted)
+      .map(book => book.id);
     
-    if (allFilteredSelected) {
-      setSelected(prev => prev.filter(id => !filteredBookIds.includes(id)));
+    const allSelectableSelected = selectableBookIds.every(id => selected.includes(id));
+    
+    if (allSelectableSelected) {
+      // Deselect all selectable books
+      setSelected(prev => prev.filter(id => !selectableBookIds.includes(id)));
     } else {
-      setSelected(prev => [...new Set([...prev, ...filteredBookIds])]);
+      // Select all selectable books
+      setSelected(prev => [...new Set([...prev, ...selectableBookIds])]);
     }
   };
 
@@ -279,8 +310,14 @@ export default function SupportLetterPage() {
       setLoading(true);
       setError(null);
       
-      // Fetch all data without date restrictions
-      const data = await getAvailableSenders("", "");
+      if (!session?.user?.token) {
+        setError('ไม่พบข้อมูลการเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่');
+        setLoading(false);
+        return;
+      }
+      
+      // Fetch pending senders data (which includes is_response_submitted field)
+      const data = await getPendingSenders(session.user.token);
       
       // Filter data to only include cases with request_ids
       const casesWithRequestIds = data.filter((item: any) => 
@@ -297,15 +334,108 @@ export default function SupportLetterPage() {
     } finally {
       setLoading(false);
     }
-  }, [processRawDataToBooks]);
+  }, [processRawDataToBooks, session?.user?.token]);
 
-  const handleApprove = () => {
-    if (selected.length === 0) return;
-    alert(`กำลังดำเนินการอนุมัติหนังสือ:\n${selected.join('\n')}\n\nจำนวน: ${selected.length} รายการ`);
-  };
+  const handleApprove = useCallback(async () => {
+    if (selected.length === 0) {
+      alert('กรุณาเลือกคำขอที่ต้องการอนุมัติ');
+      return;
+    }
+    
+    if (!session?.user?.token) {
+      alert('ไม่พบข้อมูลการเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่');
+      return;
+    }
 
-  // Computed values
-  const allFilteredSelected = filteredBooks.length > 0 && filteredBooks.every(book => selected.includes(book.id));
+    // Check if any selected books already have responses submitted
+    const selectedBooks = books.filter(book => selected.includes(book.id));
+    const booksWithResponses = selectedBooks.filter(book => book.is_response_submitted);
+    
+    if (booksWithResponses.length > 0) {
+      const responseMessage = booksWithResponses.length === selectedBooks.length
+        ? `ไม่สามารถอนุมัติได้ เนื่องจากคำขอทั้งหมดที่เลือกได้รับการตอบกลับจากผู้ให้บริการแล้ว:\n\n${booksWithResponses.map(b => b.id).join('\n')}`
+        : `ไม่สามารถอนุมัติคำขอดังต่อไปนี้ได้ เนื่องจากได้รับการตอบกลับจากผู้ให้บริการแล้ว:\n\n${booksWithResponses.map(b => b.id).join('\n')}\n\nกรุณาเลือกเฉพาะคำขอที่ยังไม่ได้รับการตอบกลับ`;
+      
+      alert(responseMessage);
+      return;
+    }
+
+    const requestIds = selected;
+    const approvalConfirm = confirm(
+      `คุณต้องการอนุมัติหนังสือสำหรับคำขอดังต่อไปนี้หรือไม่?\n\n` +
+      `Request IDs:\n${requestIds.join('\n')}\n\n` +
+      `จำนวน: ${requestIds.length} คำขอ`
+    );
+    
+    if (!approvalConfirm) return;
+
+    // Track which requests are being approved
+    setApprovingRequests(new Set(requestIds));
+    
+    try {
+      const approvalResults = [];
+      
+      // Approve each request sequentially
+      for (const requestId of requestIds) {
+        try {
+          console.log(`🔄 Approving request: ${requestId}`);
+          const result = await approveRequest(requestId, session.user.token);
+          approvalResults.push({ requestId, success: true, result });
+          console.log(`✅ Successfully approved request: ${requestId}`, result);
+        } catch (error) {
+          console.error(`❌ Failed to approve request: ${requestId}`, error);
+          approvalResults.push({ 
+            requestId, 
+            success: false, 
+            error: error instanceof Error ? error.message : 'Unknown error' 
+          });
+        }
+      }
+      
+      // Show results
+      const successCount = approvalResults.filter(r => r.success).length;
+      const failCount = approvalResults.filter(r => !r.success).length;
+      
+      if (successCount > 0 && failCount === 0) {
+        alert(`✅ อนุมัติหนังสือสำเร็จ!\n\nจำนวนที่อนุมัติ: ${successCount} คำขอ`);
+        // Clear selection
+        setSelected([]);
+        // Refresh data to show updated status
+        await handleRefresh();
+      } else if (successCount > 0 && failCount > 0) {
+        const failedRequests = approvalResults
+          .filter(r => !r.success)
+          .map(r => `${r.requestId}: ${r.error}`)
+          .join('\n');
+        alert(
+          `⚠️ อนุมัติบางส่วนสำเร็จ\n\n` +
+          `สำเร็จ: ${successCount} คำขอ\n` +
+          `ล้มเหลว: ${failCount} คำขอ\n\n` +
+          `รายการที่ล้มเหลว:\n${failedRequests}`
+        );
+        // Clear selection for successful ones
+        const successfulIds = approvalResults.filter(r => r.success).map(r => r.requestId);
+        setSelected(prev => prev.filter(id => !successfulIds.includes(id)));
+        // Refresh data
+        await handleRefresh();
+      } else {
+        const failedRequests = approvalResults
+          .map(r => `${r.requestId}: ${r.error}`)
+          .join('\n');
+        alert(`❌ ไม่สามารถอนุมัติได้\n\n${failedRequests}`);
+      }
+      
+    } catch (error) {
+      console.error('❌ Approval process failed:', error);
+      alert(`เกิดข้อผิดพลาดในการอนุมัติ: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setApprovingRequests(new Set());
+    }
+  }, [selected, session?.user?.token, handleRefresh, books]);
+
+  // Computed values - only consider books that can be selected (haven't been responded to)
+  const selectableBooks = filteredBooks.filter(book => !book.is_response_submitted);
+  const allFilteredSelected = selectableBooks.length > 0 && selectableBooks.every(book => selected.includes(book.id));
 
   // Loading state
   if (loading) {
@@ -374,6 +504,7 @@ export default function SupportLetterPage() {
           totalBooks={books.length}
           onSelectAll={handleSelectAll}
           onApprove={handleApprove}
+          isApproving={approvingRequests.size > 0}
         />
 
         {/* Results */}
@@ -408,6 +539,7 @@ export default function SupportLetterPage() {
         <FloatingActionButton 
           selectedCount={selected.length}
           onApprove={handleApprove}
+          isApproving={approvingRequests.size > 0}
         />
       </div>
 

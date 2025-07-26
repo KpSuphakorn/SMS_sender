@@ -23,7 +23,13 @@ export const authOptions: AuthOptions = {
       },
     }),
   ],
-  session: { strategy: "jwt" },
+  session: { 
+    strategy: "jwt",
+    // Set session to last 24 hours
+    maxAge: 24 * 60 * 60, // 24 hours
+    // Update session only every 2 hours
+    updateAge: 2 * 60 * 60, // 2 hours
+  },
   pages: {
     signIn: "/login",
   },

@@ -1,31 +1,33 @@
-// API helper functions for future backend integration
-// These functions currently use mock data but can be easily replaced with actual API calls
+// API helper functions for telco backend integration
+import { ApiSenderData, TelcoRecord, IspResponseApiResponse } from './types';
 
-import { TelcoRecord, TelcoSubmissionRequest, TelcoSubmissionResponse, ApiResponse } from './types';
+// Base API URL - adjust this to match your backend
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
 
-// Base API URL - will be used when connecting to backend
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api';
-
-// Mock API responses for development
-const MOCK_ENABLED = process.env.NODE_ENV === 'development';
+// Helper function to get auth headers
+const getAuthHeaders = (token?: string) => {
+  return {
+    'Content-Type': 'application/json',
+    ...(token && { 'Authorization': `Bearer ${token}` }),
+  };
+};
 
 // Generic API request function
 async function apiRequest<T>(
   endpoint: string, 
-  options: RequestInit = {}
-): Promise<ApiResponse<T>> {
+  options: RequestInit = {},
+  token?: string
+): Promise<{ success: boolean; data?: T; error?: string }> {
   try {
-    const url = `${API_BASE_URL}${endpoint}`;
+    const url = `${BACKEND_URL}/api${endpoint}`;
     const response = await fetch(url, {
-      headers: {
-        'Content-Type': 'application/json',
-        ...options.headers,
-      },
+      headers: getAuthHeaders(token),
       ...options,
     });
 
     if (!response.ok) {
-      throw new Error(`API Error: ${response.status} ${response.statusText}`);
+      const errorText = await response.text();
+      throw new Error(`API Error: ${response.status} - ${errorText}`);
     }
 
     const data = await response.json();
@@ -39,208 +41,173 @@ async function apiRequest<T>(
   }
 }
 
-// API Functions for Telco Data Management
+/**
+ * Fetch pending senders for the current telco user
+ * Returns data grouped by request_id
+ */
+export async function fetchIspPendingSenders(token?: string): Promise<{ success: boolean; data?: Record<string, ApiSenderData[]>; error?: string }> {
+  return apiRequest<Record<string, ApiSenderData[]>>('/isp-pending-senders', {}, token);
+}
 
 /**
- * Submit telco record with files to backend
- * @param request - The submission request with record ID and files
- * @returns Promise with submission response
+ * Download file by ID (for PDFs, Excel files, etc.)
  */
-export async function submitTelcoRecord(
-  request: TelcoSubmissionRequest
-): Promise<ApiResponse<TelcoSubmissionResponse>> {
-  if (MOCK_ENABLED) {
-    // Mock response for development
-    await new Promise(resolve => setTimeout(resolve, 1500)); // Simulate network delay
+export async function downloadFile(fileId: string, token?: string): Promise<{ success: boolean; data?: Blob; filename?: string; error?: string }> {
+  try {
+    const url = `${BACKEND_URL}/api/file/${fileId}`;
+    const response = await fetch(url, {
+      headers: {
+        ...(token && { 'Authorization': `Bearer ${token}` }),
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Download failed: ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    const filename = response.headers.get('content-disposition')?.split('filename=')[1]?.replace(/"/g, '') || 'download';
     
-    return {
-      success: true,
-      data: {
-        id: request.recordId,
-        status: 'submitted',
-        submittedAt: new Date(),
-        notes: 'Successfully submitted via mock API'
-      }
+    return { success: true, data: blob, filename };
+  } catch (error) {
+    console.error('Download Error:', error);
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Download failed' 
     };
   }
+}
 
-  // Real API call - uncomment and modify when backend is ready
-  /*
-  const formData = new FormData();
-  formData.append('recordId', request.recordId);
-  formData.append('registrationDocument', request.registrationDocument);
-  formData.append('paymentProof', request.paymentProof);
-  formData.append('idCard', request.idCard);
-  
-  if (request.metadata) {
-    formData.append('metadata', JSON.stringify(request.metadata));
+/**
+ * Submit ISP response with Excel file and attachments
+ */
+export async function submitIspResponse(
+  requestId: string, 
+  files: File[],
+  token?: string
+): Promise<{ success: boolean; data?: IspResponseApiResponse; error?: string }> {
+  try {
+    const formData = new FormData();
+    files.forEach((file, index) => {
+      formData.append('files', file);
+    });
+
+    const url = `${BACKEND_URL}/api/isp-response/${requestId}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        ...(token && { 'Authorization': `Bearer ${token}` }),
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Submission failed: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    return { success: true, data };
+  } catch (error) {
+    console.error('Submission Error:', error);
+    return { 
+      success: false, 
+      error: error instanceof Error ? error.message : 'Submission failed' 
+    };
   }
+}
 
-  return apiRequest<TelcoSubmissionResponse>('/telco/submit', {
-    method: 'POST',
-    body: formData,
-    headers: {} // Remove Content-Type for FormData
-  });
-  */
-
-  // Placeholder return for now
+/**
+ * Convert API sender data to frontend TelcoRecord format
+ */
+export function convertApiDataToTelcoRecord(apiData: ApiSenderData): TelcoRecord {
   return {
-    success: false,
-    error: 'Backend API not yet implemented'
+    id: `${apiData.sender_name}-${apiData.request_id}`,
+    requestId: apiData.request_id,
+    senderName: apiData.sender_name,
+    phoneNumber: apiData.phone_number,
+    mobileProvider: apiData.mobile_provider,
+    fullName: apiData.full_name || '',
+    date: apiData.date,
+    registrationDate: apiData.sender_created_date,
+    
+    // Excel fillable fields (may be empty initially)
+    simType: apiData.sim_type || '',
+    registrationType: apiData.registration_type || '',
+    imei: apiData.imei || '',
+    callSite: apiData.call_site || '',
+    incidentCount: apiData.incident_count || '',
+    hasLog: apiData.log_found || '',
+    cibResult: apiData.cib_ccib_result || '',
+    caseId: apiData.case_id || '',
+    contactInfo: apiData.contact_info || '',
+    note: apiData.note || '',
+    
+    // Status and submission info
+    status: apiData.status,
+    latestStatus: apiData.latest_request_status,
+    statusDescription: apiData.status_description,
+    isResponseSubmitted: apiData.is_response_submitted,
+    
+    // PDF IDs
+    dataPdfId: apiData.data_pdf_id,
+    suspensionPdfId: apiData.pdf_sent_suspension_id,
+    replyFileId: apiData.reply_file_id,
+    
+    // Metadata
+    createdAt: apiData.created_at,
+    updatedAt: apiData.updated_at,
   };
 }
 
 /**
- * Get all telco records
- * @returns Promise with array of telco records
+ * Generate Excel template with data from fetched records
  */
-export async function getTelcoRecords(): Promise<ApiResponse<TelcoRecord[]>> {
-  if (MOCK_ENABLED) {
-    // Return empty array for mock - data will be managed locally
-    return { success: true, data: [] };
-  }
+export function generateTelcoExcelTemplate(records: TelcoRecord[]): any[][] {
+  const headers = [
+    'หมายเลขที่แสดง/Sender Name',
+    'เบอร์โทรศัพท์',
+    'โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)',
+    'ชื่อสกุลผู้จดทะเบียน',
+    'วันที่จดทะเบียนเบอร์',
+    'ประเภทซิม',
+    'ประเภทการลงทะเบียนซิม',
+    'IMEI',
+    'Call Site',
+    'จำนวนครั้งการก่อเหตุ',
+    'พบ log การรับไหม',
+    'ผลการตรวจสอบCIB/CCIB',
+    'case ID NO',
+    'ข้อมูลการติดต่อ',
+    'Note'
+  ];
 
-  return apiRequest<TelcoRecord[]>('/telco/records');
+  const dataRows = records.map(record => [
+    record.senderName,
+    record.phoneNumber,
+    record.mobileProvider,
+    record.fullName,
+    record.date,
+    record.simType || '',
+    record.registrationType || '',
+    record.imei || '',
+    record.callSite || '',
+    record.incidentCount || '',
+    record.hasLog || '',
+    record.cibResult || '',
+    record.caseId || '',
+    record.contactInfo || '',
+    record.note || ''
+  ]);
+
+  return [headers, ...dataRows];
 }
 
 /**
- * Update telco record
- * @param id - Record ID
- * @param updates - Partial record updates
- * @returns Promise with updated record
+ * Download Excel template with data
  */
-export async function updateTelcoRecord(
-  id: string, 
-  updates: Partial<TelcoRecord>
-): Promise<ApiResponse<TelcoRecord>> {
-  if (MOCK_ENABLED) {
-    // Mock update - just return the updates
-    await new Promise(resolve => setTimeout(resolve, 500));
-    return { 
-      success: true, 
-      data: { id, ...updates } as TelcoRecord 
-    };
-  }
-
-  return apiRequest<TelcoRecord>(`/telco/records/${id}`, {
-    method: 'PUT',
-    body: JSON.stringify(updates),
-  });
+export function downloadExcelTemplate(records: TelcoRecord[], requestId: string) {
+  // This function will be called from the component with XLSX library
+  const data = generateTelcoExcelTemplate(records);
+  return data;
 }
-
-/**
- * Delete telco record
- * @param id - Record ID
- * @returns Promise with success status
- */
-export async function deleteTelcoRecord(id: string): Promise<ApiResponse<{ deleted: boolean }>> {
-  if (MOCK_ENABLED) {
-    await new Promise(resolve => setTimeout(resolve, 500));
-    return { success: true, data: { deleted: true } };
-  }
-
-  return apiRequest<{ deleted: boolean }>(`/telco/records/${id}`, {
-    method: 'DELETE',
-  });
-}
-
-/**
- * Bulk submit multiple records
- * @param recordIds - Array of record IDs to submit
- * @returns Promise with bulk submission results
- */
-export async function bulkSubmitRecords(recordIds: string[]): Promise<ApiResponse<{
-  successful: string[];
-  failed: { id: string; error: string }[];
-}>> {
-  if (MOCK_ENABLED) {
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    return {
-      success: true,
-      data: {
-        successful: recordIds,
-        failed: []
-      }
-    };
-  }
-
-  return apiRequest('/telco/bulk-submit', {
-    method: 'POST',
-    body: JSON.stringify({ recordIds }),
-  });
-}
-
-/**
- * Get submission status for a record
- * @param recordId - Record ID
- * @returns Promise with submission status
- */
-export async function getSubmissionStatus(recordId: string): Promise<ApiResponse<TelcoSubmissionResponse>> {
-  if (MOCK_ENABLED) {
-    await new Promise(resolve => setTimeout(resolve, 300));
-    return {
-      success: true,
-      data: {
-        id: recordId,
-        status: 'processing',
-        submittedAt: new Date(),
-        notes: 'Processing submission'
-      }
-    };
-  }
-
-  return apiRequest<TelcoSubmissionResponse>(`/telco/submissions/${recordId}`);
-}
-
-// Helper function to check if API is available
-export async function checkApiHealth(): Promise<boolean> {
-  if (MOCK_ENABLED) {
-    return true;
-  }
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/health`);
-    return response.ok;
-  } catch {
-    return false;
-  }
-}
-
-// Configuration object for easy backend integration
-export const ApiConfig = {
-  baseUrl: API_BASE_URL,
-  endpoints: {
-    submit: '/telco/submit',
-    records: '/telco/records',
-    bulkSubmit: '/telco/bulk-submit',
-    submissions: '/telco/submissions',
-    health: '/health'
-  },
-  mockEnabled: MOCK_ENABLED
-};
-
-// Example of how to use these functions:
-/*
-// In your component:
-import { submitTelcoRecord, getTelcoRecords } from './api';
-
-const handleSubmit = async (recordId: string, files: { reg: File, payment: File, id: File }) => {
-  const result = await submitTelcoRecord({
-    recordId,
-    registrationDocument: files.reg,
-    paymentProof: files.payment,
-    idCard: files.id,
-    metadata: {
-      submittedBy: session?.user?.name || 'Unknown',
-      submittedAt: new Date(),
-      notes: 'Submitted from telco interface'
-    }
-  });
-
-  if (result.success) {
-    console.log('Submission successful:', result.data);
-  } else {
-    console.error('Submission failed:', result.error);
-  }
-};
-*/

@@ -25,9 +25,22 @@ export const BookCard = ({
   return (
     <div
       className={`bg-white rounded-2xl shadow-lg border-2 transition-all duration-300 hover:shadow-xl hover:scale-[1.02] ${
-        isSelected ? "border-blue-500 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-blue-200" : "border-gray-200 hover:border-gray-300"
+        book.is_response_submitted 
+          ? "border-green-500 bg-gradient-to-br from-green-50 to-emerald-50 shadow-green-200" 
+          : isSelected 
+            ? "border-blue-500 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-blue-200" 
+            : "border-gray-200 hover:border-gray-300"
       }`}
     >
+      {/* Response Submitted Banner */}
+      {book.is_response_submitted && (
+        <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white text-center py-2 rounded-t-xl">
+          <div className="font-semibold text-sm">
+            ✅ ได้รับการตอบกลับจากผู้ให้บริการแล้ว - ไม่สามารถอนุมัติซ้ำได้
+          </div>
+        </div>
+      )}
+      
       <div className="p-8">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -56,7 +69,12 @@ export const BookCard = ({
                 type="checkbox"
                 checked={isSelected}
                 onChange={onToggleSelect}
-                className="w-6 h-6 accent-blue-500 cursor-pointer rounded-lg"
+                disabled={book.is_response_submitted} // Disable selection if response submitted
+                className={`w-6 h-6 cursor-pointer rounded-lg ${
+                  book.is_response_submitted 
+                    ? "accent-gray-400 cursor-not-allowed opacity-50" 
+                    : "accent-blue-500"
+                }`}
               />
             </div>
           </div>

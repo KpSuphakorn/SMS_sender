@@ -110,23 +110,35 @@ export const getTemplateHelpSuggestions = (validation: TemplateValidationResult)
 // Utility functions for telco data processing
 export const generateMockRecord = (index: number): TelcoRecord => ({
   id: `record-${index + 1}`,
-  registrationDate: new Date(2025, 0, 15 + index).toLocaleDateString('th-TH'),
-  registrantId: `ID${(1000 + index).toString()}`,
+  requestId: `REQ-${index + 1}`,
+  senderName: `Sender-${index + 1}`,
+  phoneNumber: `0${80000000 + index}`,
+  mobileProvider: index % 3 === 0 ? 'AIS' : index % 3 === 1 ? 'TRUE' : 'DTAC',
   fullName: `นายทดสอบ ${index + 1}`,
+  date: new Date(2025, 0, 15 + index).toLocaleDateString('th-TH'),
+  registrationDate: new Date(2025, 0, 15 + index).toLocaleDateString('th-TH'),
   simType: index % 2 === 0 ? 'Pre-paid' : 'Post-paid',
   registrationType: index % 3 === 0 ? 'บุคคลธรรมดา' : 'นิติบุคคล',
   imei: `${350000000000000 + index}`,
   callSite: `Site-${index + 1}`,
   incidentCount: Math.floor(Math.random() * 5) + 1,
-  hasLog: Math.random() > 0.3,
+  hasLog: Math.random() > 0.3 ? 'มี' : 'ไม่มี',
   cibResult: ['Clean', 'Suspicious', 'Flagged'][Math.floor(Math.random() * 3)],
   caseId: `CASE-${(2025000 + index).toString()}`,
   contactInfo: `0${80000000 + index}`,
   note: index % 4 === 0 ? `หมายเหตุสำหรับเคส ${index + 1}` : '',
-  isUploaded: true,
-  isSubmitted: false,
-  createdAt: new Date(),
-  updatedAt: new Date()
+  status: [{
+    name: 'pending',
+    updated_at: new Date().toISOString()
+  }],
+  latestStatus: 'pending',
+  statusDescription: 'รอการดำเนินการ',
+  isResponseSubmitted: false,
+  dataPdfId: null,
+  suspensionPdfId: `PDF-${index + 1}`,
+  replyFileId: `REPLY-${index + 1}`,
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString()
 });
 
 // Check if a row has meaningful data (not completely empty)
@@ -136,7 +148,7 @@ export const isValidExcelRow = (row: ExcelData): boolean => {
   // Check essential fields that should have data
   const essentialFields = [
     row[mapping.fullName],
-    row[mapping.registrantId],
+    row[mapping.senderName],
     row[mapping.caseId]
   ];
   
@@ -155,23 +167,35 @@ export const convertExcelRowToRecord = (row: ExcelData, index: number): TelcoRec
   
   return {
     id: `excel-${index + 1}`,
-    registrationDate: row[mapping.registrationDate] || '',
-    registrantId: row[mapping.registrantId] || '',
+    requestId: `REQ-${index + 1}`,
+    senderName: row[mapping.senderName] || `Sender-${index + 1}`,
+    phoneNumber: row[mapping.phoneNumber] || '',
+    mobileProvider: row[mapping.mobileProvider] || '',
     fullName: row[mapping.fullName] || `ไม่ระบุชื่อ ${index + 1}`,
+    date: row[mapping.registrationDate] || '',
+    registrationDate: row[mapping.registrationDate] || '',
     simType: row[mapping.simType] || '',
     registrationType: row[mapping.registrationType] || '',
     imei: row[mapping.imei] || '',
     callSite: row[mapping.callSite] || '',
     incidentCount: parseInt(row[mapping.incidentCount]) || 0,
-    hasLog: row[mapping.hasLog] === 'มี' || row[mapping.hasLog] === 'Yes' || row[mapping.hasLog] === true,
+    hasLog: row[mapping.hasLog] === 'มี' || row[mapping.hasLog] === 'Yes' ? 'มี' : 'ไม่มี',
     cibResult: row[mapping.cibResult] || '',
     caseId: row[mapping.caseId] || `CASE-${index + 1}`,
     contactInfo: row[mapping.contactInfo] || '',
     note: row[mapping.note] || '',
-    isUploaded: true,
-    isSubmitted: false,
-    createdAt: new Date(),
-    updatedAt: new Date()
+    status: [{
+      name: 'pending',
+      updated_at: new Date().toISOString()
+    }],
+    latestStatus: 'pending',
+    statusDescription: 'รอการดำเนินการ',
+    isResponseSubmitted: false,
+    dataPdfId: null,
+    suspensionPdfId: `PDF-${index + 1}`,
+    replyFileId: `REPLY-${index + 1}`,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
   };
 };
 
@@ -184,7 +208,8 @@ export const filterRecords = (records: TelcoRecord[], filters: TelcoFilters): Te
       const searchableFields = [
         record.fullName,
         record.caseId,
-        record.registrantId,
+        record.senderName,
+        record.phoneNumber,
         record.contactInfo,
         record.imei,
         record.note
@@ -199,10 +224,10 @@ export const filterRecords = (records: TelcoRecord[], filters: TelcoFilters): Te
     if (filters.status !== 'all') {
       switch (filters.status) {
         case 'submitted':
-          if (!record.isSubmitted) return false;
+          if (!record.isResponseSubmitted) return false;
           break;
         case 'pending':
-          if (record.isSubmitted) return false;
+          if (record.isResponseSubmitted) return false;
           break;
         case 'with_documents':
           if (!record.registrationDocument || !record.paymentProof || !record.idCard) {
@@ -241,8 +266,8 @@ export const filterRecords = (records: TelcoRecord[], filters: TelcoFilters): Te
 export const calculateStats = (records: TelcoRecord[]) => {
   return {
     total: records.length,
-    submitted: records.filter(r => r.isSubmitted).length,
-    pending: records.filter(r => !r.isSubmitted).length,
+    submitted: records.filter(r => r.isResponseSubmitted).length,
+    pending: records.filter(r => !r.isResponseSubmitted).length,
     withDocuments: records.filter(r => 
       r.registrationDocument && r.paymentProof && r.idCard
     ).length
@@ -287,9 +312,11 @@ export const generateExcelTemplate = () => {
   const mapping = DEFAULT_EXCEL_MAPPING;
   return [
     [
-      mapping.registrationDate,
-      mapping.registrantId,
+      mapping.senderName,
+      mapping.phoneNumber,
+      mapping.mobileProvider,
       mapping.fullName,
+      mapping.registrationDate,
       mapping.simType,
       mapping.registrationType,
       mapping.imei,
@@ -302,9 +329,9 @@ export const generateExcelTemplate = () => {
       mapping.note
     ],
     // Example rows
-    ['15/01/2025', 'ID1001', 'นายตัวอย่าง 1', 'Pre-paid', 'บุคคลธรรมดา', '350000000000001', 'Site-1', '2', 'มี', 'Clean', 'CASE-2025001', '0800000001', 'หมายเหตุตัวอย่าง'],
-    ['16/01/2025', 'ID1002', 'นายตัวอย่าง 2', 'Post-paid', 'นิติบุคคล', '350000000000002', 'Site-2', '1', 'ไม่มี', 'Suspicious', 'CASE-2025002', '0800000002', ''],
-    ['', '', '', '', '', '', '', '', '', '', '', '', ''], // Empty row for user input
+    ['12345', '0800000001', 'AIS', 'นายตัวอย่าง 1', '15/01/2025', 'Pre-paid', 'บุคคลธรรมดา', '350000000000001', 'Site-1', '2', 'มี', 'Clean', 'CASE-2025001', '0800000001', 'หมายเหตุตัวอย่าง'],
+    ['12346', '0800000002', 'TRUE', 'นายตัวอย่าง 2', '16/01/2025', 'Post-paid', 'นิติบุคคล', '350000000000002', 'Site-2', '1', 'ไม่มี', 'Suspicious', 'CASE-2025002', '0800000002', ''],
+    ['', '', '', '', '', '', '', '', '', '', '', '', '', '', ''], // Empty row for user input
   ];
 };
 
@@ -338,8 +365,8 @@ export const sortRecords = (records: TelcoRecord[], sortBy: string, sortOrder: '
         bValue = b.cibResult;
         break;
       case 'status':
-        aValue = a.isSubmitted ? 1 : 0;
-        bValue = b.isSubmitted ? 1 : 0;
+        aValue = a.isResponseSubmitted ? 1 : 0;
+        bValue = b.isResponseSubmitted ? 1 : 0;
         break;
       default:
         aValue = a.createdAt;
@@ -360,15 +387,15 @@ export const sortRecords = (records: TelcoRecord[], sortBy: string, sortOrder: '
 
 // Validate if a record is ready for submission
 export const canSubmitRecord = (record: TelcoRecord): boolean => {
-  return !!(record.registrationDocument && record.paymentProof && record.idCard && !record.isSubmitted);
+  return !!(record.registrationDocument && record.paymentProof && record.idCard && !record.isResponseSubmitted);
 };
 
 // Get submission validation results for all records
 export const getSubmissionValidation = (records: TelcoRecord[]) => {
   const submittableRecords = records.filter(canSubmitRecord);
-  const alreadySubmitted = records.filter(record => record.isSubmitted);
+  const alreadySubmitted = records.filter(record => record.isResponseSubmitted);
   const missingDocuments = records.filter(record => 
-    !record.isSubmitted && !canSubmitRecord(record)
+    !record.isResponseSubmitted && !canSubmitRecord(record)
   );
 
   return {

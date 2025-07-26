@@ -21,13 +21,13 @@ export const RecordCard: React.FC<RecordCardProps> = ({
   const [isExpanded, setIsExpanded] = useState(false);
 
   const updateFile = (field: keyof TelcoRecord, file: File | null) => {
-    onUpdate(record.id, { [field]: file, updatedAt: new Date() });
+    onUpdate(record.id, { [field]: file, updatedAt: new Date().toISOString() });
   };
 
-  const canSubmit = record.registrationDocument && record.paymentProof && record.idCard && !record.isSubmitted;
+  const canSubmit = record.registrationDocument && record.paymentProof && record.idCard && !record.isResponseSubmitted;
 
   const getStatusBadge = () => {
-    if (record.isSubmitted) {
+    if (record.isResponseSubmitted) {
       return (
         <span className="inline-flex items-center gap-1 bg-green-100 text-green-800 text-xs font-medium px-3 py-1 rounded-full">
           <CheckCircle2 className="w-4 h-4" />
@@ -76,7 +76,7 @@ export const RecordCard: React.FC<RecordCardProps> = ({
             <div>
               <h3 className="text-lg font-semibold text-gray-900">{record.fullName}</h3>
               <p className="text-sm text-gray-600">Case ID: {record.caseId}</p>
-              <p className="text-sm text-gray-500">ID: {record.registrantId}</p>
+              <p className="text-sm text-gray-500">Sender: {record.senderName}</p>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -162,14 +162,6 @@ export const RecordCard: React.FC<RecordCardProps> = ({
                     </p>
                   </div>
                 )}
-                {record.submittedAt && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500 text-sm">ส่งข้อมูลเมื่อ:</span>
-                    <p className="font-medium text-green-600">
-                      {record.submittedAt.toLocaleString('th-TH')}
-                    </p>
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -212,7 +204,7 @@ export const RecordCard: React.FC<RecordCardProps> = ({
               <div className="text-sm text-gray-500">
                 {canSubmit ? (
                   <span className="text-green-600 font-medium">✓ พร้อมส่งข้อมูล</span>
-                ) : record.isSubmitted ? (
+                ) : record.isResponseSubmitted ? (
                   <span className="text-blue-600 font-medium">✓ ส่งข้อมูลเรียบร้อยแล้ว</span>
                 ) : (
                   <span>กรุณาอัปโหลดเอกสารให้ครบทั้ง 3 ไฟล์</span>
@@ -244,7 +236,7 @@ export const RecordCard: React.FC<RecordCardProps> = ({
                     <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-500"></div>
                     กำลังส่งทั้งหมด...
                   </>
-                ) : record.isSubmitted ? (
+                ) : record.isResponseSubmitted ? (
                   <>
                     <CheckCircle2 className="w-4 h-4" />
                     ส่งข้อมูลแล้ว

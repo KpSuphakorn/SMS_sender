@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import { Pie, Bar, Line } from "react-chartjs-2";
 import {
   Chart as ChartJS,
@@ -15,8 +16,13 @@ import {
 } from "chart.js";
 import { DatePickerInput } from '@mantine/dates';
 import { MantineProvider } from '@mantine/core';
+import { CheckCircle, Clock, AlertCircle, Download } from "lucide-react";
 import '@mantine/core/styles.css';
 import '@mantine/dates/styles.css';
+
+// Import API functions
+import getPendingRequests from "@/libs/getPendingRequests";
+import approveRequest from "@/libs/approveRequest";
 
 ChartJS.register(ArcElement, Tooltip, Legend, BarElement, CategoryScale, LinearScale, LineElement, PointElement);
 
@@ -32,6 +38,20 @@ interface CaseData {
   isRecurring?: boolean;
 }
 
+interface PendingRequest {
+  request_id: string;
+  senders: Array<{
+    sender_name: string;
+    phone_number: string;
+    mobile_provider: string;
+    full_name?: string;
+    date: string;
+  }>;
+  is_approved: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 interface NetworkData {
   name: string;
   totalCases: number;
@@ -42,15 +62,68 @@ interface NetworkData {
 }
 
 export default function Dashboard() {
+  const { data: session } = useSession();
   const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
   const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([
     new Date(), // Today: July 1, 2025
     new Date()  // Today: July 1, 2025
   ]);
   const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [selectedDate, setSelectedDate] = useState<string | null>(null); // For chart date filtering
-  const [highValueFilter, setHighValueFilter] = useState<boolean>(false); // For high-value cases
-  const [overdueFilter, setOverdueFilter] = useState<"waiting_3days" | "sent_7days" | null>(null); // For overdue cases
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [highValueFilter, setHighValueFilter] = useState<boolean>(false);
+  const [overdueFilter, setOverdueFilter] = useState<"waiting_3days" | "sent_7days" | null>(null);
+  
+  // New states for pending requests
+  const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
+  const [isLoadingRequests, setIsLoadingRequests] = useState(false);
+  const [approvingRequests, setApprovingRequests] = useState<Set<string>>(new Set());
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch pending requests
+  const fetchPendingRequests = useCallback(async () => {
+    if (!session?.user?.token) return;
+    
+    setIsLoadingRequests(true);
+    setError(null);
+    
+    try {
+      const result = await getPendingRequests(session.user.token);
+      setPendingRequests(result);
+    } catch (err) {
+      console.error('Error fetching pending requests:', err);
+      setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดข้อมูล');
+    } finally {
+      setIsLoadingRequests(false);
+    }
+  }, [session?.user?.token]);
+
+  // Load pending requests on component mount
+  useEffect(() => {
+    fetchPendingRequests();
+  }, [fetchPendingRequests]);
+
+  // Approve request function
+  const handleApproveRequest = useCallback(async (requestId: string) => {
+    if (!session?.user?.token) return;
+    
+    setApprovingRequests(prev => new Set([...prev, requestId]));
+    
+    try {
+      await approveRequest(requestId, session.user.token);
+      // Refresh pending requests after approval
+      await fetchPendingRequests();
+      alert(`อนุมัติคำขอ ${requestId} สำเร็จ`);
+    } catch (err) {
+      console.error('Error approving request:', err);
+      alert(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการอนุมัติ');
+    } finally {
+      setApprovingRequests(prev => {
+        const updated = new Set(prev);
+        updated.delete(requestId);
+        return updated;
+      });
+    }
+  }, [session?.user?.token, fetchPendingRequests]);
 
   const handleDateRangeChange = (value: [string | null, string | null]) => {
     const convertedRange: [Date | null, Date | null] = [
@@ -579,6 +652,108 @@ export default function Dashboard() {
             <div className="text-xs text-gray-500">≥ 10,000 บาท</div>
           </div>
         </div>
+
+        {/* Admin Approval Section */}
+        {session?.user?.role === 'admin' && (
+          <div className="mb-8">
+            <div className="bg-white p-6 rounded-xl shadow-lg">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-semibold text-gray-800 flex items-center">
+                  <Clock className="h-6 w-6 mr-2 text-orange-500" />
+                  คำขอรออนุมัติ
+                </h2>
+                <button
+                  onClick={fetchPendingRequests}
+                  disabled={isLoadingRequests}
+                  className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors"
+                >
+                  {isLoadingRequests ? 'กำลังโหลด...' : 'รีเฟรช'}
+                </button>
+              </div>
+
+              {error && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
+                  {error}
+                </div>
+              )}
+
+              {pendingRequests.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  <CheckCircle className="h-16 w-16 mx-auto mb-4 text-gray-300" />
+                  <p>ไม่มีคำขอรออนุมัติ</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {pendingRequests
+                    .filter(req => !req.is_approved)
+                    .map((request) => (
+                    <div key={request.request_id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <h3 className="text-lg font-medium text-gray-900">
+                            Request ID: {request.request_id}
+                          </h3>
+                          <p className="text-sm text-gray-600">
+                            สร้างเมื่อ: {new Date(request.created_at).toLocaleDateString('th-TH', {
+                              year: 'numeric',
+                              month: 'long',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </p>
+                        </div>
+                        <button
+                          onClick={() => handleApproveRequest(request.request_id)}
+                          disabled={approvingRequests.has(request.request_id)}
+                          className="bg-green-500 text-white px-6 py-2 rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
+                        >
+                          {approvingRequests.has(request.request_id) ? (
+                            <>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                              กำลังอนุมัติ...
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle className="h-4 w-4" />
+                              อนุมัติ
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      <div className="bg-gray-50 rounded-lg p-3">
+                        <h4 className="text-sm font-medium text-gray-700 mb-2">
+                          รายการผู้ส่ง ({request.senders.length} รายการ):
+                        </h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {request.senders.slice(0, 6).map((sender, index) => (
+                            <div key={index} className="bg-white rounded p-2 text-xs">
+                              <div className="font-medium text-gray-900">
+                                {sender.sender_name}
+                              </div>
+                              <div className="text-gray-600">
+                                {sender.phone_number}
+                              </div>
+                              <div className="text-gray-500">
+                                {sender.mobile_provider}
+                              </div>
+                            </div>
+                          ))}
+                          {request.senders.length > 6 && (
+                            <div className="bg-gray-100 rounded p-2 text-xs text-center text-gray-600 flex items-center justify-center">
+                              +{request.senders.length - 6} รายการ
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Charts */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">

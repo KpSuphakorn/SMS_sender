@@ -467,7 +467,7 @@ async def get_isp_pending_senders(current_user: dict = Depends(get_current_user)
     
     return clean_nan_values(results_by_request_id)
 
-@router.post("/complete-suspension/{sender_name}")
+@router.post("/complete-suspension/{sender_name}") #Note
 def complete_suspension(sender_name: str, current_user: dict = Depends(get_current_user)):
     check_admin(current_user)
     

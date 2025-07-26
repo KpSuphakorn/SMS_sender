@@ -22,6 +22,7 @@ export interface Case {
   fields: string[];
   request_ids: Array<{ id: string; status: string }>;
   reply_file_id?: string;
+  is_response_submitted?: boolean; // Track if response has been submitted
 }
 
 export interface Book {
@@ -34,6 +35,8 @@ export interface Book {
   other: number;
   status: 'urgent' | 'processing' | 'completed' | 'pending';
   cases: Case[];
+  is_response_submitted?: boolean; // True if any case in this book has been responded to
+  canApprove?: boolean; // True if this book can be approved (no responses submitted)
 }
 
 // Raw data interface from API
@@ -54,4 +57,5 @@ export interface RawCaseData {
   fields: string[];
   request_ids: Array<{ id: string; status: string }>;
   reply_file_id?: { $oid: string };
+  is_response_submitted?: boolean; // From API response
 }
