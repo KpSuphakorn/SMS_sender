@@ -29,7 +29,7 @@ const menuItems = [
     color: "from-green-500 to-green-600",
     hoverColor: "hover:border-green-200",
     textColor: "group-hover:text-green-700",
-    roles: ["telco"], // Only telco can see
+    roles: ["telco", "ais", "dtac", "true", "nt"], // ISP/Telco roles can see
   },
   { 
     label: "ค้นหาข้อมูลทั้งหมด", 

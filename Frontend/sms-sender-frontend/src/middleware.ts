@@ -15,8 +15,9 @@ export async function middleware(request: NextRequest) {
 
   // Role-specific access control
   if (request.nextUrl.pathname.startsWith('/telco')) {
-    // Only telco role can access telco pages
-    if (role !== 'telco') {
+    // Allow telco and ISP roles to access telco pages
+    const allowedTelcoRoles = ['telco', 'ais', 'dtac', 'true', 'nt'];
+    if (!allowedTelcoRoles.includes(role || '')) {
       return NextResponse.redirect(new URL('/nice-try', request.url));
     }
   } else {

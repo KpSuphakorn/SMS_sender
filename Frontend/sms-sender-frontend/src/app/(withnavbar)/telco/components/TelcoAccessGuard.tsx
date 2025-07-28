@@ -23,18 +23,38 @@ export const TelcoAccessGuard: React.FC<TelcoAccessGuardProps> = ({
     );
   }
 
-  if (userRole !== "telco") {
+  // Allow access for telco-related roles
+  const allowedRoles = ["telco", "ais", "dtac", "true", "nt"];
+  
+  // Normalize the role for comparison (trim whitespace and convert to lowercase)
+  const normalizedUserRole = userRole?.trim().toLowerCase();
+  const isAuthorized = normalizedUserRole && allowedRoles.includes(normalizedUserRole);
+
+  if (!isAuthorized) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-red-50 via-orange-50 to-yellow-50 flex items-center justify-center p-4">
         <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md w-full mx-4 text-center">
           <div className="text-red-500 text-6xl mb-6">🚫</div>
           <h1 className="text-2xl font-bold text-red-600 mb-3">ไม่มีสิทธิ์เข้าใช้</h1>
           <p className="text-gray-600 mb-4 leading-relaxed">
-            หน้านี้สำหรับผู้ใช้งานที่มีบทบาทเป็น <strong>"Telco"</strong> เท่านั้น
+            หน้านี้สำหรับผู้ใช้งานที่มีบทบาทเป็น <strong>Telco/ISP</strong> เท่านั้น
           </p>
+          <div className="bg-blue-50 p-4 rounded-lg mb-4">
+            <p className="text-sm text-blue-800 font-medium mb-2">บทบาทที่ได้รับอนุญาต:</p>
+            <div className="flex flex-wrap gap-1 justify-center">
+              {allowedRoles.map(role => (
+                <span key={role} className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-medium uppercase">
+                  {role}
+                </span>
+              ))}
+            </div>
+          </div>
           <div className="bg-gray-50 p-4 rounded-lg mb-4">
             <p className="text-sm text-gray-600">
               <strong>บทบาทปัจจุบัน:</strong> {userRole || 'ไม่ระบุ'}
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              <strong>Normalized:</strong> {normalizedUserRole || 'ไม่ระบุ'}
             </p>
           </div>
           <p className="text-sm text-gray-500">
