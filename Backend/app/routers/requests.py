@@ -20,15 +20,12 @@ router = APIRouter()
 async def store_sender_collection(data: SenderRequest, current_user: dict = Depends(get_current_user)):
     sender_names = sender_names_collection()
     pending_requests = pending_requests_collection()
-    response_from_telco = response_from_telco_collection()
     request_id = generate_request_id()
     now = datetime.datetime.now()
     sender_entries = []
-    existing_data = []
 
     valid_providers = {"true", "dtac", "ais", "nt", "telco"}
 
-    # แมปค่า provider ที่ไม่ถูกต้อง
     provider_mapping = {
         "dtac": "dtac",
         "ais": "ais",
@@ -43,8 +40,7 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail="ต้องมี sender_name และ phone_number")
         mobile_provider = clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip()
-        mobile_provider = provider_mapping.get(mobile_provider, "nt")  # แปลงค่าไม่ถูกต้องเป็น nt
-        print(f"Received: sender_name={row['sender_name']}, mobile_provider={mobile_provider}")  # Log เพื่อตรวจสอบ
+        mobile_provider = provider_mapping.get(mobile_provider, 'telco')
 
         if mobile_provider not in valid_providers:
             raise HTTPException(status_code=400, detail=f"mobile_provider ต้องเป็นหนึ่งใน {', '.join(valid_providers)}")
@@ -53,96 +49,22 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
         sender_name = clean_excel_data(str(row["sender_name"])).strip()
         phone_number = clean_excel_data(str(row["phone_number"])).strip()
         mobile_provider = provider_mapping.get(clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip(), "nt")
-        
-        existing_sender = sender_names.find_one(
-            {"sender_name": sender_name, "phone_number": phone_number},
-            sort=[("created_at", -1)]
-        )
-        
-        existing_telco = response_from_telco.find_one({
+
+        new_doc = {
             "sender_name": sender_name,
-            "phone_number": phone_number
-        })
-
-        if existing_telco:
-            if existing_sender:
-                current_status = add_status(existing_sender.get("status", []), "received", now)
-                sender_names.update_one(
-                    {"_id": existing_sender["_id"]},
-                    {"$set": {
-                        "request_ids": existing_sender.get("request_ids", []) + [{"id": request_id, "status": "completed_from_existing"}],
-                        "status": current_status,
-                        "reply_file_id": existing_telco.get("reply_file_id"),
-                        "updated_at": now
-                    }}
-                )
-            else:
-                sender_names.insert_one({
-                    "sender_name": sender_name,
-                    "phone_number": phone_number,
-                    "mobile_provider": provider_mapping.get(existing_telco.get("mobile_provider", "unknown").lower(), "nt"),
-                    "full_name": existing_telco.get("full_name"),
-                    "date": existing_telco.get("date"),
-                    "request_ids": [{"id": request_id, "status": "completed_from_existing"}],
-                    "fields": data.fields,
-                    "status": [{"name": "received", "updated_at": now}],
-                    "reply_file_id": existing_telco.get("reply_file_id"),
-                    "created_by": current_user["id"],
-                    "created_at": now,
-                    "updated_at": now
-                })
-            
-            existing_data.append({
-                "sender_name": sender_name,
-                "phone_number": phone_number,
-                "reused_request_id": existing_telco.get("request_id"),
-                "status": "ใช้ข้อมูลที่มีอยู่แล้ว"
-            })
-            continue
-
-        if existing_sender and (has_received_status(existing_sender) or existing_sender.get("reply_file_id")):
-            sender_names.update_one(
-                {"_id": existing_sender["_id"]},
-                {"$set": {
-                    "request_ids": existing_sender.get("request_ids", []) + [{"id": request_id, "status": "skipped"}],
-                    "updated_at": now
-                }}
-            )
-            
-            existing_data.append({
-                "sender_name": sender_name,
-                "phone_number": phone_number,
-                "status": "ข้ามเนื่องจากมีข้อมูลแล้ว"
-            })
-            continue
-
-        if existing_sender:
-            sender_names.update_one(
-                {"_id": existing_sender["_id"]},
-                {"$set": {
-                    "request_ids": existing_sender.get("request_ids", []) + [{"id": request_id, "status": "pending"}],
-                    "updated_at": now,
-                    "status": add_status(existing_sender.get("status", []), "pending", now),
-                    "mobile_provider": mobile_provider
-                }}
-            )
-            sender_object_id = existing_sender["_id"]
-        else:
-            new_doc = {
-                "sender_name": sender_name,
-                "phone_number": phone_number,
-                "mobile_provider": mobile_provider,
-                "full_name": row.get("full_name"),
-                "date": row.get("date"),
-                "request_ids": [{"id": request_id, "status": "pending"}],
-                "fields": data.fields,
-                "status": [{"name": "pending", "updated_at": now}],
-                "created_by": current_user["id"],
-                "created_at": now,
-                "updated_at": now
-            }
-            result = sender_names.insert_one(new_doc)
-            sender_object_id = result.inserted_id
+            "phone_number": phone_number,
+            "mobile_provider": mobile_provider,
+            "full_name": row.get("full_name"),
+            "date": row.get("date"),
+            "request_ids": [{"id": request_id, "status": "pending"}],
+            "fields": data.fields,
+            "status": [{"name": "pending", "updated_at": now}],
+            "created_by": current_user["id"],
+            "created_at": now,
+            "updated_at": now
+        }
+        result = sender_names.insert_one(new_doc)
+        sender_object_id = result.inserted_id
 
         sender_entries.append({
             "sender_name": sender_name,
@@ -164,8 +86,6 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
         "message": "บันทึกสำเร็จ",
         "request_id": request_id,
         "new_requests_count": len(sender_entries),
-        "existing_data_count": len(existing_data),
-        "existing_data": existing_data
     }
 
 @router.post("/approve-request/{request_id}")
