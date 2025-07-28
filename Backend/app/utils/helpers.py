@@ -34,15 +34,12 @@ def is_status_object(status):
     return all(isinstance(s, dict) and "name" in s for s in status) if status else False
 
 def format_sender_doc(doc, include_telco_data=False, response_from_telco=None, include_pdf_ids=False):
-    """Format a sender_names document into API response structure."""
     status = doc.get("status", [])
     if not is_status_object(status):
         status = [{"name": s, "updated_at": doc.get("updated_at", datetime.now())} for s in status]
     
     latest_request_id = [req["id"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None
     
-    # Describe latest status
-    latest_status_name = next((s["name"] for s in status[-1:]), None)
     status_descriptions = {
         "pending": "รอข้อมูลจาก กสทช",
         "suspension_requested": "รอการระงับสัญญาณ",
@@ -69,7 +66,7 @@ def format_sender_doc(doc, include_telco_data=False, response_from_telco=None, i
             for req in doc.get("request_ids", [])
         ],
         "latest_request_status": next((req["status"] for req in doc.get("request_ids", []) if req["id"] == latest_request_id), None),
-        "status_description": status_descriptions.get(latest_status_name, "ไม่ทราบสถานะ"),
+        "status_description": status_descriptions.get(next((s["name"] for s in status[-1:]), None), "ไม่ทราบสถานะ"),
         "created_at": doc["created_at"],
         "updated_at": doc["updated_at"]
     }
@@ -80,13 +77,12 @@ def format_sender_doc(doc, include_telco_data=False, response_from_telco=None, i
             "phone_number": doc["phone_number"],
             "request_id": {"$in": [req["id"] for req in doc.get("request_ids", [])]}
         })
-        # Clean NaN values from telco data before including in response
         telco_data = clean_nan_values(response.get("data", {})) if response else {}
-        reply_file_id = str(response.get("reply_file_id", "")) if response else ""
+        all_reply_file_ids = [str(file_id) for file_id in response.get("all_reply_file_ids", [])] if response else []
         
         base_data.update({
             "data": telco_data,
-            "reply_file_id": reply_file_id
+            "all_reply_file_ids": all_reply_file_ids
         })
         if include_pdf_ids:
             base_data.update({
@@ -94,7 +90,6 @@ def format_sender_doc(doc, include_telco_data=False, response_from_telco=None, i
                 "pdf_sent_suspension_id": str(doc.get("pdf_sent_suspension_id", ""))
             })
     
-    # Clean the entire base_data to ensure no NaN values
     return clean_nan_values(base_data)
 
 def generate_request_id():
@@ -132,3 +127,9 @@ def add_status(current_status, new_status, updated_at):
         status_list.append({"name": new_status, "updated_at": updated_at})
     
     return status_list
+
+def clean_excel_data(value):
+    """Clean Excel data by removing unwanted characters like _x000D_ and extra whitespace."""
+    if isinstance(value, str):
+        return value.strip().replace('_x000D_', '').replace('\r', '').replace('\n', '')
+    return value

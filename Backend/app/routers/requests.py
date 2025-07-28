@@ -6,13 +6,12 @@ from typing import Optional, List
 from app.schemas.request import SenderRequest
 from app.utils.pdf import generate_custom_pdf_and_store, generate_suspension_pdf
 from app.dependencies import get_current_user
-from app.utils.helpers import add_status, check_admin, convert_objectid_to_str, format_sender_doc, generate_request_id, has_received_status, is_status_object, clean_nan_values
+from app.utils.helpers import add_status, check_admin, clean_excel_data, convert_objectid_to_str, format_sender_doc, generate_request_id, has_received_status, is_status_object, clean_nan_values
 from app.models.database import grid_fs
 from app.models.sender_names import sender_names_collection
 from app.models.response_from_telco import response_from_telco_collection
 from app.models.pending_requests import pending_requests_collection
 from bson.objectid import ObjectId
-import random
 from fastapi.responses import FileResponse
 
 router = APIRouter()
@@ -21,115 +20,51 @@ router = APIRouter()
 async def store_sender_collection(data: SenderRequest, current_user: dict = Depends(get_current_user)):
     sender_names = sender_names_collection()
     pending_requests = pending_requests_collection()
-    response_from_telco = response_from_telco_collection()
     request_id = generate_request_id()
     now = datetime.datetime.now()
     sender_entries = []
-    existing_data = []
 
     valid_providers = {"true", "dtac", "ais", "nt", "telco"}
+
+    provider_mapping = {
+        "dtac": "dtac",
+        "ais": "ais",
+        "true": "true",
+        "tot": "nt",
+        "cat": "nt",
+        "1-to-all": "telco",
+        "unknown": "nt"
+    }
 
     for row in data.rows:
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail="ต้องมี sender_name และ phone_number")
-        mobile_provider = row.get("mobile_provider", "unknown").lower()
-        if mobile_provider != "unknown" and mobile_provider not in valid_providers:
+        mobile_provider = clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip()
+        mobile_provider = provider_mapping.get(mobile_provider, 'telco')
+
+        if mobile_provider not in valid_providers:
             raise HTTPException(status_code=400, detail=f"mobile_provider ต้องเป็นหนึ่งใน {', '.join(valid_providers)}")
 
     for row in data.rows:
-        sender_name = row["sender_name"]
-        phone_number = row["phone_number"]
-        mobile_provider = row.get("mobile_provider", "unknown").lower()
-        
-        existing_sender = sender_names.find_one(
-            {"sender_name": sender_name, "phone_number": phone_number},
-            sort=[("created_at", -1)]
-        )
-        
-        existing_telco = response_from_telco.find_one({
+        sender_name = clean_excel_data(str(row["sender_name"])).strip()
+        phone_number = clean_excel_data(str(row["phone_number"])).strip()
+        mobile_provider = provider_mapping.get(clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip(), "nt")
+
+        new_doc = {
             "sender_name": sender_name,
-            "phone_number": phone_number
-        })
-
-        if existing_telco:
-            if existing_sender:
-                current_status = add_status(existing_sender.get("status", []), "received", now)
-                sender_names.update_one(
-                    {"_id": existing_sender["_id"]},
-                    {"$set": {
-                        "request_ids": existing_sender.get("request_ids", []) + [{"id": request_id, "status": "completed_from_existing"}],
-                        "status": current_status,
-                        "reply_file_id": existing_telco.get("reply_file_id"),
-                        "updated_at": now
-                    }}
-                )
-            else:
-                sender_names.insert_one({
-                    "sender_name": sender_name,
-                    "phone_number": phone_number,
-                    "mobile_provider": existing_telco.get("mobile_provider", "unknown").lower(),
-                    "full_name": existing_telco.get("full_name"),
-                    "date": existing_telco.get("date"),
-                    "request_ids": [{"id": request_id, "status": "completed_from_existing"}],
-                    "fields": data.fields,
-                    "status": [{"name": "received", "updated_at": now}],
-                    "reply_file_id": existing_telco.get("reply_file_id"),
-                    "created_by": current_user["id"],
-                    "created_at": now,
-                    "updated_at": now
-                })
-            
-            existing_data.append({
-                "sender_name": sender_name,
-                "phone_number": phone_number,
-                "reused_request_id": existing_telco.get("request_id"),
-                "status": "ใช้ข้อมูลที่มีอยู่แล้ว"
-            })
-            continue
-
-        if existing_sender and (has_received_status(existing_sender) or existing_sender.get("reply_file_id")):
-            sender_names.update_one(
-                {"_id": existing_sender["_id"]},
-                {"$set": {
-                    "request_ids": existing_sender.get("request_ids", []) + [{"id": request_id, "status": "skipped"}],
-                    "updated_at": now
-                }}
-            )
-            
-            existing_data.append({
-                "sender_name": sender_name,
-                "phone_number": phone_number,
-                "status": "ข้ามเนื่องจากมีข้อมูลแล้ว"
-            })
-            continue
-
-        if existing_sender:
-            sender_names.update_one(
-                {"_id": existing_sender["_id"]},
-                {"$set": {
-                    "request_ids": existing_sender.get("request_ids", []) + [{"id": request_id, "status": "pending"}],
-                    "updated_at": now,
-                    "status": add_status(existing_sender.get("status", []), "pending", now),
-                    "mobile_provider": mobile_provider
-                }}
-            )
-            sender_object_id = existing_sender["_id"]
-        else:
-            new_doc = {
-                "sender_name": sender_name,
-                "phone_number": phone_number,
-                "mobile_provider": mobile_provider,
-                "full_name": row.get("full_name"),
-                "date": row.get("date"),
-                "request_ids": [{"id": request_id, "status": "pending"}],
-                "fields": data.fields,
-                "status": [{"name": "pending", "updated_at": now}],
-                "created_by": current_user["id"],
-                "created_at": now,
-                "updated_at": now
-            }
-            result = sender_names.insert_one(new_doc)
-            sender_object_id = result.inserted_id
+            "phone_number": phone_number,
+            "mobile_provider": mobile_provider,
+            "full_name": row.get("full_name"),
+            "date": row.get("date"),
+            "request_ids": [{"id": request_id, "status": "pending"}],
+            "fields": data.fields,
+            "status": [{"name": "pending", "updated_at": now}],
+            "created_by": current_user["id"],
+            "created_at": now,
+            "updated_at": now
+        }
+        result = sender_names.insert_one(new_doc)
+        sender_object_id = result.inserted_id
 
         sender_entries.append({
             "sender_name": sender_name,
@@ -151,8 +86,6 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
         "message": "บันทึกสำเร็จ",
         "request_id": request_id,
         "new_requests_count": len(sender_entries),
-        "existing_data_count": len(existing_data),
-        "existing_data": existing_data
     }
 
 @router.post("/approve-request/{request_id}")
@@ -216,7 +149,7 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
             sender_names.update_one(
                 {"_id": sender["sender_object_id"]},
                 {"$set": {
-                    "data_pdf_ids": {provider: data_pdf_ids.get(provider, None)},
+                    "data_pdf_id": data_pdf_ids.get(provider, None),
                     "pdf_sent_suspension_id": str(suspension_pdf_id) if suspension_pdf_id else None,
                     "updated_at": now,
                     "status": add_status(
@@ -248,7 +181,6 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
 
     file_ids = []
     excel_content = None
-    main_file_id = None
     
     for file in files:
         content = await file.read()
@@ -260,9 +192,6 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
         })
         file_ids.append(str(file_id))
         
-        if main_file_id is None:
-            main_file_id = str(file_id)
-            
         if file.filename.endswith(('.xlsx', '.xls')):
             excel_content = content
 
@@ -284,10 +213,14 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
     successful = []
     failed = []
 
-    processed_senders = set()
+    user_role = current_user.get("role", "").lower()
+    valid_providers = {"true", "dtac", "ais", "nt", "telco"}
+    if user_role not in valid_providers:
+        raise HTTPException(status_code=403, detail="ต้องมี role เป็น true, dtac, ais, nt, หรือ telco")
+
     for _, row in df.iterrows():
         try:
-            sender_name = str(row[required_col]).strip()
+            sender_name = clean_excel_data(str(row[required_col]))
             if not sender_name or sender_name == 'nan':
                 continue
 
@@ -299,33 +232,42 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
                 continue
 
             sender_doc = sender_names.find_one({"_id": sender_entry["sender_object_id"]})
-            if sender_doc:
-                now = datetime.datetime.now()
-                new_status = add_status(sender_doc.get("status", []), "received", now)
-                
-                updated_request_ids = []
-                for req in sender_doc.get("request_ids", []):
-                    if req["id"] == request_id:
-                        updated_request_ids.append({"id": req["id"], "status": "received"})
-                    else:
-                        updated_request_ids.append(req)
+            if not sender_doc:
+                failed.append(sender_name)
+                continue
 
-                sender_names.update_one(
-                    {"_id": sender_doc["_id"]},
-                    {"$set": {
-                        "status": new_status,
-                        "request_ids": updated_request_ids,
-                        "reply_file_id": main_file_id,
-                        "updated_at": now
-                    }}
-                )
+            excel_provider = clean_excel_data(str(row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", "unknown"))).lower()
+            sender_provider = sender_doc.get("mobile_provider", "unknown").lower()
+            if excel_provider != user_role or sender_provider != user_role:
+                failed.append(f"{sender_name}: mobile_provider mismatch (Excel: {excel_provider}, Sender: {sender_provider}, Role: {user_role})")
+                continue
+
+            now = datetime.datetime.now()
+            new_status = add_status(sender_doc.get("status", []), "received", now)
+            
+            updated_request_ids = []
+            for req in sender_doc.get("request_ids", []):
+                if req["id"] == request_id:
+                    updated_request_ids.append({"id": req["id"], "status": "received"})
+                else:
+                    updated_request_ids.append(req)
+
+            sender_names.update_one(
+                {"_id": sender_doc["_id"]},
+                {"$set": {
+                    "status": new_status,
+                    "request_ids": updated_request_ids,
+                    "all_reply_file_ids": file_ids,  # เปลี่ยนจาก reply_file_id เป็น all_reply_file_ids
+                    "updated_at": now
+                }}
+            )
 
             telco_data = {
                 "request_id": request_id,
                 "sender_name": sender_name,
                 "phone_number": sender_doc.get("phone_number", ""),
                 "sender_object_id": sender_entry["sender_object_id"],
-                "mobile_provider": row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", sender_doc.get("mobile_provider", "unknown")).lower(),
+                "mobile_provider": excel_provider,
                 "full_name": row.get("ชื่อสกุลผู้จดทะเบียน", sender_doc.get("full_name")),
                 "date": row.get("วันที่จดทะเบียนเบอร์", sender_doc.get("date")),
                 "sim_type": row.get("ประเภทซิม"),
@@ -338,8 +280,7 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
                 "case_id": row.get("case ID NO"),
                 "contact_info": row.get("ข้อมูลการติดต่อ"),
                 "note": row.get("Note"),
-                "reply_file_id": main_file_id,
-                "all_reply_file_ids": file_ids,
+                "all_reply_file_ids": file_ids,  # เปลี่ยนจาก reply_file_id เป็น all_reply_file_ids
                 "created_at": now,
                 "updated_at": now,
                 "created_by": current_user["id"]
@@ -352,48 +293,9 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
             )
             
             successful.append(sender_name)
-            processed_senders.add(sender_name)
             
         except Exception as e:
             failed.append(f"{sender_name}: {str(e)}")
-
-    # Update remaining senders in the request to mark as processed if not in Excel
-    for sender in pending_doc.get("senders", []):
-        if sender["sender_name"] not in processed_senders:
-            sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
-            if sender_doc and not (has_received_status(sender_doc) or sender_doc.get("reply_file_id")):
-                updated_request_ids = [
-                    {"id": req["id"], "status": "received" if req["id"] == request_id else req["status"]}
-                    for req in sender_doc.get("request_ids", [])
-                ]
-                sender_names.update_one(
-                    {"_id": sender["sender_object_id"]},
-                    {"$set": {
-                        "status": add_status(sender_doc.get("status", []), "received", now),
-                        "request_ids": updated_request_ids,
-                        "reply_file_id": main_file_id,
-                        "updated_at": now
-                    }}
-                )
-                response_from_telco.update_one(
-                    {"request_id": request_id, "sender_name": sender["sender_name"]},
-                    {"$set": {
-                        "request_id": request_id,
-                        "sender_name": sender["sender_name"],
-                        "phone_number": sender["phone_number"],
-                        "sender_object_id": sender["sender_object_id"],
-                        "mobile_provider": sender_doc.get("mobile_provider", "unknown").lower(),
-                        "full_name": sender_doc.get("full_name"),
-                        "date": sender_doc.get("date"),
-                        "reply_file_id": main_file_id,
-                        "all_reply_file_ids": file_ids,
-                        "created_at": now,
-                        "updated_at": now,
-                        "created_by": current_user["id"],
-                        "note": "Auto-marked as received due to partial response"
-                    }},
-                    upsert=True
-                )
 
     return {
         "message": f"ประมวลผล ISP response สำเร็จ",
@@ -458,8 +360,7 @@ async def get_isp_pending_senders(current_user: dict = Depends(get_current_user)
                     include_pdf_ids=True
                 )
                 formatted_doc["request_id"] = request_id
-                data_pdf_ids = sender_doc.get("data_pdf_ids", {})
-                formatted_doc["data_pdf_id"] = data_pdf_ids.get(user_role, None)
+                formatted_doc["data_pdf_id"] = sender_doc.get("data_pdf_id", None)
                 formatted_doc["is_response_submitted"] = bool(sender_doc.get("reply_file_id"))
                 results_by_request_id[request_id].append(formatted_doc)
     
