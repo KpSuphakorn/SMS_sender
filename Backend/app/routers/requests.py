@@ -6,7 +6,7 @@ from typing import Optional, List
 from app.schemas.request import SenderRequest
 from app.utils.pdf import generate_custom_pdf_and_store, generate_suspension_pdf
 from app.dependencies import get_current_user
-from app.utils.helpers import add_status, check_admin, convert_objectid_to_str, format_sender_doc, generate_request_id, has_received_status, is_status_object, clean_nan_values
+from app.utils.helpers import add_status, check_admin, clean_excel_data, convert_objectid_to_str, format_sender_doc, generate_request_id, has_received_status, is_status_object, clean_nan_values
 from app.models.database import grid_fs
 from app.models.sender_names import sender_names_collection
 from app.models.response_from_telco import response_from_telco_collection
@@ -28,17 +28,31 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
 
     valid_providers = {"true", "dtac", "ais", "nt", "telco"}
 
+    # แมปค่า provider ที่ไม่ถูกต้อง
+    provider_mapping = {
+        "dtac": "dtac",
+        "ais": "ais",
+        "true": "true",
+        "tot": "nt",
+        "cat": "nt",
+        "1-to-all": "telco",
+        "unknown": "nt"
+    }
+
     for row in data.rows:
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail="ต้องมี sender_name และ phone_number")
-        mobile_provider = row.get("mobile_provider", "unknown").lower()
-        if mobile_provider != "unknown" and mobile_provider not in valid_providers:
+        mobile_provider = clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip()
+        mobile_provider = provider_mapping.get(mobile_provider, "nt")  # แปลงค่าไม่ถูกต้องเป็น nt
+        print(f"Received: sender_name={row['sender_name']}, mobile_provider={mobile_provider}")  # Log เพื่อตรวจสอบ
+
+        if mobile_provider not in valid_providers:
             raise HTTPException(status_code=400, detail=f"mobile_provider ต้องเป็นหนึ่งใน {', '.join(valid_providers)}")
 
     for row in data.rows:
-        sender_name = row["sender_name"]
-        phone_number = row["phone_number"]
-        mobile_provider = row.get("mobile_provider", "unknown").lower()
+        sender_name = clean_excel_data(str(row["sender_name"])).strip()
+        phone_number = clean_excel_data(str(row["phone_number"])).strip()
+        mobile_provider = provider_mapping.get(clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip(), "nt")
         
         existing_sender = sender_names.find_one(
             {"sender_name": sender_name, "phone_number": phone_number},
@@ -66,7 +80,7 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
                 sender_names.insert_one({
                     "sender_name": sender_name,
                     "phone_number": phone_number,
-                    "mobile_provider": existing_telco.get("mobile_provider", "unknown").lower(),
+                    "mobile_provider": provider_mapping.get(existing_telco.get("mobile_provider", "unknown").lower(), "nt"),
                     "full_name": existing_telco.get("full_name"),
                     "date": existing_telco.get("date"),
                     "request_ids": [{"id": request_id, "status": "completed_from_existing"}],
@@ -286,7 +300,7 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
 
     for _, row in df.iterrows():
         try:
-            sender_name = str(row[required_col]).strip()
+            sender_name = clean_excel_data(str(row[required_col]))
             if not sender_name or sender_name == 'nan':
                 continue
 
@@ -302,8 +316,7 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
                 failed.append(sender_name)
                 continue
 
-            # Check if mobile_provider matches user_role
-            excel_provider = str(row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", "unknown")).lower()
+            excel_provider = clean_excel_data(str(row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", "unknown"))).lower()
             sender_provider = sender_doc.get("mobile_provider", "unknown").lower()
             if excel_provider != user_role or sender_provider != user_role:
                 failed.append(f"{sender_name}: mobile_provider mismatch (Excel: {excel_provider}, Sender: {sender_provider}, Role: {user_role})")

@@ -127,3 +127,9 @@ def add_status(current_status, new_status, updated_at):
         status_list.append({"name": new_status, "updated_at": updated_at})
     
     return status_list
+
+def clean_excel_data(value):
+    """Clean Excel data by removing unwanted characters like _x000D_ and extra whitespace."""
+    if isinstance(value, str):
+        return value.strip().replace('_x000D_', '').replace('\r', '').replace('\n', '')
+    return value
