@@ -465,17 +465,30 @@ async def get_isp_pending_senders(current_user: dict = Depends(get_current_user)
     
     return clean_nan_values(results_by_request_id)
 
-@router.post("/complete-suspension/{sender_name}") #Note
-def complete_suspension(sender_name: str, current_user: dict = Depends(get_current_user)):
+@router.post("/complete-suspension/{request_id}/{sender_name}")
+def complete_suspension(request_id: str, sender_name: str, current_user: dict = Depends(get_current_user)):
     check_admin(current_user)
     
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
+    pending_requests = pending_requests_collection()
     
-    doc = sender_names.find_one({"sender_name": sender_name})
+    # ตรวจสอบว่า request_id มีอยู่และอนุมัติแล้ว
+    pending_doc = pending_requests.find_one({"request_id": request_id, "is_approved": True})
+    if not pending_doc:
+        raise HTTPException(status_code=404, detail="ไม่พบ request หรือ request ยังไม่ได้รับการอนุมัติ")
+    
+    # ตรวจสอบว่า sender_name มีอยู่ใน pending_doc
+    sender_entry = next((s for s in pending_doc["senders"] if s["sender_name"] == sender_name), None)
+    if not sender_entry:
+        raise HTTPException(status_code=404, detail=f"ไม่พบ sender {sender_name} ใน request {request_id}")
+    
+    # ค้นหา sender document
+    doc = sender_names.find_one({"_id": sender_entry["sender_object_id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="ไม่พบ sender")
     
+    # ตรวจสอบสถานะ suspended
     current_status = doc.get("status", [])
     if is_status_object(current_status):
         status_names = [s["name"] for s in current_status]
@@ -483,18 +496,20 @@ def complete_suspension(sender_name: str, current_user: dict = Depends(get_curre
         status_names = current_status
     
     if "suspended" in status_names:
-        return {"message": "ระงับแล้ว"}
+        return {"message": f"sender {sender_name} ระงับแล้วสำหรับ request {request_id}"}
     
     now = datetime.datetime.now()
     new_status = add_status(current_status, "suspended", now)
     
+    # อัปเดตเฉพาะ request_id ที่ระบุ
     updated_request_ids = [
-        {**req, "status": "suspended"} if req["status"] != "suspended" else req
+        {**req, "status": "suspended"} if req["id"] == request_id else req
         for req in doc.get("request_ids", [])
     ]
     
+    # อัปเดต sender document
     sender_names.update_one(
-        {"sender_name": sender_name},
+        {"_id": sender_entry["sender_object_id"]},
         {"$set": {
             "status": new_status,
             "request_ids": updated_request_ids,
@@ -503,23 +518,22 @@ def complete_suspension(sender_name: str, current_user: dict = Depends(get_curre
         }}
     )
     
-    for req in doc.get("request_ids", []):
-        response_from_telco.update_one(
-            {"sender_name": sender_name, "request_id": req["id"]},
-            {
-                "$set": {
-                    "updated_at": now,
-                    "phone_number": doc.get("phone_number"),
-                    "mobile_provider": doc.get("mobile_provider"),
-                    "full_name": doc.get("full_name"),
-                    "date": doc.get("date")
-                },
-                "$push": {"status": {"name": "suspended", "updated_at": now}}
+    response_from_telco.update_one(
+        {"sender_name": sender_name, "request_id": request_id},
+        {
+            "$set": {
+                "updated_at": now,
+                "phone_number": doc.get("phone_number"),
+                "mobile_provider": doc.get("mobile_provider"),
+                "full_name": doc.get("full_name"),
+                "date": doc.get("date")
             },
-            upsert=True
-        )
+            "$push": {"status": {"name": "suspended", "updated_at": now}}
+        },
+        upsert=True
+    )
     
-    return {"message": "ระงับ sender สำเร็จ"}
+    return {"message": f"ระงับ sender {sender_name} สำหรับ request {request_id} สำเร็จ"}
 
 @router.get("/available-senders")
 def get_available_senders(start: Optional[str] = Query(None), end: Optional[str] = Query(None)):
