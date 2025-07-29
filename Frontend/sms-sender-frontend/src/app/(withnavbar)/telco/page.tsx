@@ -512,7 +512,9 @@ export default function TelcoPage() {
     try {
       console.log(`🚫 Completing suspension for request ${requestId}, sender ${senderName}...`);
       
-      const response = await fetch(`/api/request/complete-suspension/${requestId}/${encodeURIComponent(senderName)}`, {
+      // Use the correct backend URL format that matches other API calls
+      const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
+      const response = await fetch(`${backendUrl}/api/complete-suspension/${requestId}/${encodeURIComponent(senderName)}`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${session.user.token}`,

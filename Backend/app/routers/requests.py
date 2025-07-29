@@ -467,7 +467,12 @@ async def get_isp_pending_senders(current_user: dict = Depends(get_current_user)
 
 @router.post("/complete-suspension/{request_id}/{sender_name}")
 def complete_suspension(request_id: str, sender_name: str, current_user: dict = Depends(get_current_user)):
-    check_admin(current_user)
+    # check_admin(current_user)
+
+    valid_roles = {"true", "dtac", "ais", "nt", "telco"}
+    user_role = current_user.get("role", "").lower()
+    if user_role not in valid_roles:
+        raise HTTPException(status_code=403, detail="ต้องมี role เป็น true, dtac, ais, nt, หรือ telco")
     
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
