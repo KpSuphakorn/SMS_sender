@@ -168,6 +168,7 @@ interface CaseData {
   request_ids: Array<{ id: string; status: string }>;
   reply_file_id?: string;
   full_name?: string;
+  all_reply_file_ids?: string[];
 }
 
 const CaseCard = memo(({ 
@@ -236,11 +237,33 @@ const CaseCard = memo(({
             </div>
           ))}
         </div>
+        
+        {caseItem.all_reply_file_ids && caseItem.all_reply_file_ids.length > 0 && (
+          <div className="flex items-center">
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onCaseClick(caseItem);
+              }}
+              className="flex items-center gap-1 px-3 py-2 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-lg transition-colors text-xs font-medium"
+              title={`${caseItem.all_reply_file_ids.length} ไฟล์พร้อมดาวน์โหลด`}
+            >
+              <Download className="w-3 h-3" />
+              {caseItem.all_reply_file_ids.length}
+            </button>
+          </div>
+        )}
       </div>
     </div>
     
-    <div className="text-right text-gray-400 text-xs mt-3">
-      Case ID: {caseItem.id}
+    <div className="flex justify-between items-center text-gray-400 text-xs mt-3">
+      <div>Case ID: {caseItem.id}</div>
+      {caseItem.all_reply_file_ids && caseItem.all_reply_file_ids.length > 0 && (
+        <div className="flex items-center gap-1 text-blue-600">
+          {/* <Download className="w-3 h-3" /> */}
+          {/* <span>{caseItem.all_reply_file_ids.length} ไฟล์</span> */}
+        </div>
+      )}
     </div>
   </div>
 ));
@@ -354,6 +377,7 @@ export default function AllDataPage() {
         request_ids: item.request_ids || [],
         reply_file_id: item.reply_file_id?.$oid || item.reply_file_id,
         full_name: item.full_name,
+        all_reply_file_ids: item.all_reply_file_ids || [],
       }));
       
       mappedCases.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
@@ -370,6 +394,46 @@ export default function AllDataPage() {
   useEffect(() => {
     fetchAllData();
   }, [fetchAllData]);
+
+  // Download file function
+  const handleDownloadFile = useCallback(async (fileId: string, fileName?: string) => {
+    if (!session?.user?.token) {
+      alert('❌ ไม่พบข้อมูลการเข้าสู่ระบบ');
+      return;
+    }
+
+    try {
+      console.log(`📥 Downloading file: ${fileId}`);
+      
+      const response = await fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL}/api/file/${fileId}`, {
+        headers: {
+          'Authorization': `Bearer ${session.user.token}`,
+        },
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Download failed: ${response.status}`);
+      }
+      
+      const blob = await response.blob();
+      const contentDisposition = response.headers.get('content-disposition');
+      const filename = contentDisposition?.split('filename=')[1]?.replace(/"/g, '') || fileName || 'download';
+      
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      
+      console.log(`✅ File downloaded: ${filename}`);
+    } catch (error) {
+      console.error('💥 Download error:', error);
+      alert(`❌ ไม่สามารถดาวน์โหลดไฟล์ได้: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }, [session]);
 
   const handleDateRangeChange = useCallback((range: DatesRangeValue) => {
     setDateRange(range);
@@ -1058,6 +1122,48 @@ export default function AllDataPage() {
                         </li>
                       ))}
                     </ul>
+                  </div>
+                )}
+
+                {selectedCase.all_reply_file_ids && selectedCase.all_reply_file_ids.length > 0 && (
+                  <div className="mt-6">
+                    <div className="flex justify-between items-center mb-3">
+                      <h4 className="font-bold text-gray-800 flex items-center gap-2">
+                        <Download className="w-5 h-5" />
+                        ไฟล์แนบ ({selectedCase.all_reply_file_ids.length} ไฟล์)
+                      </h4>
+                      {selectedCase.all_reply_file_ids.length > 1 && (
+                        <button
+                          onClick={() => {
+                            selectedCase.all_reply_file_ids?.forEach((fileId, i) => {
+                              setTimeout(() => {
+                                handleDownloadFile(fileId, `${selectedCase.sender}_file_${i + 1}`);
+                              }, i * 500); // Delay downloads to avoid overwhelming the browser
+                            });
+                          }}
+                          className="flex items-center gap-2 px-3 py-2 bg-green-500 hover:bg-green-600 text-white rounded-lg transition-colors text-sm font-medium"
+                        >
+                          <Download className="w-4 h-4" />
+                          ดาวน์โหลดทั้งหมด
+                        </button>
+                      )}
+                    </div>
+                    <div className="space-y-2">
+                      {selectedCase.all_reply_file_ids.map((fileId, i) => (
+                        <button
+                          key={i}
+                          onClick={() => handleDownloadFile(fileId, `${selectedCase.sender}_file_${i + 1}`)}
+                          className="flex items-center gap-2 w-full text-left p-3 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors text-sm"
+                        >
+                          <Download className="w-4 h-4 text-blue-600" />
+                          <div className="flex-1">
+                            <div className="font-medium text-blue-800">ไฟล์ที่ {i + 1}</div>
+                            <div className="text-blue-600 text-xs">File ID: {fileId}</div>
+                          </div>
+                          <div className="text-blue-600 text-xs">คลิกเพื่อดาวน์โหลด</div>
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
