@@ -1,7 +1,9 @@
 import datetime
+import re
+import unicodedata
 import pandas as pd
 from io import BytesIO
-from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, Depends, Response, UploadFile, File
 from typing import Optional, List
 from app.schemas.request import SenderRequest
 from app.utils.pdf import generate_custom_pdf_and_store, generate_suspension_pdf
@@ -535,19 +537,77 @@ def get_my_requests(current_user: dict = Depends(get_current_user)):
 @router.get("/file/{file_id}")
 def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
     try:
-        file_obj = grid_fs.get(ObjectId(file_id))
-        temp_path = f"/tmp/{file_obj.filename}"
+        if not ObjectId.is_valid(file_id):
+            raise HTTPException(status_code=400, detail="รูปแบบ file_id ไม่ถูกต้อง")
         
-        with open(temp_path, 'wb') as f:
-            f.write(file_obj.read())
+        object_id = ObjectId(file_id)
         
-        if file_obj.filename.endswith('.pdf'):
-            media_type = 'application/pdf'
-        elif file_obj.filename.endswith('.xlsx'):
-            media_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        else:
-            media_type = 'text/csv'
+        if not grid_fs.exists(object_id):
+            raise HTTPException(status_code=404, detail="ไม่พบไฟล์ในระบบ")
         
-        return FileResponse(temp_path, media_type=media_type, filename=file_obj.filename)
-    except:
-        raise HTTPException(status_code=404, detail="ไม่พบไฟล์")
+        file_obj = grid_fs.get(object_id)
+        filename = file_obj.filename or f"file_{file_id}"
+        
+        file_content = file_obj.read()
+        
+        file_obj.close()
+        
+        if not file_content:
+            raise HTTPException(status_code=404, detail="ไฟล์ว่าง")
+        
+        content_type_map = {
+            '.pdf': 'application/pdf',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.xls': 'application/vnd.ms-excel',
+            '.csv': 'text/csv',
+            '.txt': 'text/plain',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp',
+            '.bmp': 'image/bmp',
+            '.svg': 'image/svg+xml'
+        }
+        
+        file_ext = '.' + filename.split('.')[-1].lower() if '.' in filename else ''
+        media_type = content_type_map.get(file_ext, 'application/octet-stream')
+        
+        inline_types = {'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'}
+        disposition = "inline" if file_ext in inline_types else "attachment"
+        
+        def make_safe_filename(name):
+            name = unicodedata.normalize('NFKD', name)
+            name = ''.join(c for c in name if ord(c) < 128)
+            name = re.sub(r'[^\w\s\-_\.]', '', name)
+            name = re.sub(r'\s+', '_', name)
+            return name.strip('_.')
+        
+        safe_filename = make_safe_filename(filename)
+        
+        if not safe_filename:
+            file_ext_safe = ''
+            if '.' in filename:
+                original_ext = filename.split('.')[-1]
+                if all(ord(c) < 128 for c in original_ext):
+                    file_ext_safe = f".{original_ext}"
+            safe_filename = f"download_{file_id}{file_ext_safe}"
+        
+        content_disposition = f"{disposition}; filename=\"{safe_filename}\""
+        
+        return Response(
+            content=file_content,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": content_disposition,
+                "Cache-Control": "no-cache"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error downloading file {file_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์: {str(e)}")
