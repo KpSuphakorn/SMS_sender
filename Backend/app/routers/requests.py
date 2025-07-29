@@ -582,6 +582,40 @@ def get_my_requests(current_user: dict = Depends(get_current_user)):
         for doc in requests
     ])
 
+@router.get("/check-suspension/{sender_name}")
+def check_sender_suspension(sender_name: str, current_user: dict = Depends(get_current_user)):
+    """
+    Check if a sender is suspended by searching for 'suspended' status in the status array
+    Returns: {"is_suspended": true/false, "sender_name": "sender_name"}
+    """
+    sender_names = sender_names_collection()
+    
+    # Find the most recent document for this sender_name
+    sender_doc = sender_names.find_one(
+        {"sender_name": sender_name}, 
+        sort=[("created_at", -1)]
+    )
+    
+    if not sender_doc:
+        raise HTTPException(status_code=404, detail=f"ไม่พบ sender {sender_name}")
+    
+    status_list = sender_doc.get("status", [])
+    is_suspended = False
+    
+    # Check if status is an array of objects or simple strings
+    if status_list and isinstance(status_list, list):
+        if len(status_list) > 0 and isinstance(status_list[0], dict):
+            # Status is array of objects with "name" field
+            is_suspended = any(status.get("name") == "suspended" for status in status_list)
+        else:
+            # Status is array of strings
+            is_suspended = "suspended" in status_list
+    
+    return {
+        "is_suspended": is_suspended,
+        "sender_name": sender_name
+    }
+
 @router.get("/file/{file_id}")
 def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
     try:
