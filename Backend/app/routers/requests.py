@@ -36,6 +36,7 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
         "unknown": "nt"
     }
 
+    # Validation
     for row in data.rows:
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail="ต้องมี sender_name และ phone_number")
@@ -45,33 +46,79 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
         if mobile_provider not in valid_providers:
             raise HTTPException(status_code=400, detail=f"mobile_provider ต้องเป็นหนึ่งใน {', '.join(valid_providers)}")
 
+    # Process each row
     for row in data.rows:
         sender_name = clean_excel_data(str(row["sender_name"])).strip()
         phone_number = clean_excel_data(str(row["phone_number"])).strip()
         mobile_provider = provider_mapping.get(clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip(), "nt")
 
-        new_doc = {
-            "sender_name": sender_name,
-            "phone_number": phone_number,
-            "mobile_provider": mobile_provider,
-            "full_name": row.get("full_name"),
-            "date": row.get("date"),
-            "request_ids": [{"id": request_id, "status": "pending"}],
-            "fields": data.fields,
-            "status": [{"name": "pending", "updated_at": now}],
-            "created_by": current_user["id"],
-            "created_at": now,
-            "updated_at": now
-        }
-        result = sender_names.insert_one(new_doc)
-        sender_object_id = result.inserted_id
+        # ค้นหา sender_name ที่มีอยู่แล้ว (เอาตัวล่าสุด)
+        existing_sender = sender_names.find_one(
+            {"sender_name": sender_name}, 
+            sort=[("created_at", -1)]  # เอาตัวล่าสุด
+        )
+        
+        if existing_sender:
+            # ใช้ข้อมูลที่มีอยู่แล้ว โดยเพิ่ม request_id ใหม่เข้าไป
+            updated_request_ids = existing_sender.get("request_ids", [])
+            
+            # ตรวจสอบว่า request_id นี้มีอยู่แล้วหรือไม่
+            request_exists = any(req["id"] == request_id for req in updated_request_ids)
+            if not request_exists:
+                updated_request_ids.append({"id": request_id, "status": "pending"})
+            
+            # อัปเดต status ถ้าจำเป็น
+            current_status = existing_sender.get("status", [])
+            updated_status = current_status
+            
+            # เพิ่ม pending status ถ้ายังไม่มี
+            if is_status_object(current_status):
+                has_pending = any(s.get("name") == "pending" for s in current_status)
+                if not has_pending:
+                    updated_status = add_status(current_status, "pending", now)
+            else:
+                if "pending" not in current_status:
+                    updated_status = add_status(current_status, "pending", now)
 
+            # อัปเดต existing document
+            sender_names.update_one(
+                {"_id": existing_sender["_id"]},
+                {"$set": {
+                    "request_ids": updated_request_ids,
+                    "fields": data.fields,
+                    "status": updated_status,
+                    "updated_at": now
+                }}
+            )
+            
+            sender_object_id = existing_sender["_id"]
+            
+        else:
+            # สร้างใหม่เฉพาะเมื่อไม่เคยมี sender_name นี้มาก่อน
+            new_doc = {
+                "sender_name": sender_name,
+                "phone_number": phone_number,
+                "mobile_provider": mobile_provider,
+                "full_name": row.get("full_name"),
+                "date": row.get("date"),
+                "request_ids": [{"id": request_id, "status": "pending"}],
+                "fields": data.fields,
+                "status": [{"name": "pending", "updated_at": now}],
+                "created_by": current_user["id"],
+                "created_at": now,
+                "updated_at": now
+            }
+            result = sender_names.insert_one(new_doc)
+            sender_object_id = result.inserted_id
+
+        # เพิ่มลงใน sender_entries สำหรับ pending_requests
         sender_entries.append({
             "sender_name": sender_name,
             "phone_number": phone_number,
             "sender_object_id": sender_object_id
         })
 
+    # สร้าง pending request
     if sender_entries:
         pending_requests.insert_one({
             "request_id": request_id,
@@ -115,17 +162,27 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
     senders_by_provider = {}
     for sender in pending_doc.get("senders", []):
         sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
-        if sender_doc and not (has_received_status(sender_doc) or sender_doc.get("reply_file_id")):
-            provider = sender_doc.get("mobile_provider", "unknown").lower()
-            if provider not in senders_by_provider:
-                senders_by_provider[provider] = []
-            senders_by_provider[provider].append({
-                "sender_name": sender["sender_name"],
-                "phone_number": sender["phone_number"],
-                "mobile_provider": provider,
-                "full_name": sender_doc.get("full_name"),
-                "date": sender_doc.get("date")
-            })
+        if sender_doc:
+            # ตรวจสอบว่า sender นี้ยังไม่ได้รับการตอบกลับสำหรับ request_id นี้
+            current_requests = sender_doc.get("request_ids", [])
+            request_status = None
+            for req in current_requests:
+                if req["id"] == request_id:
+                    request_status = req.get("status")
+                    break
+            
+            # ถ้า request นี้ยังเป็น pending ให้ส่งไป PDF
+            if request_status == "pending":
+                provider = sender_doc.get("mobile_provider", "unknown").lower()
+                if provider not in senders_by_provider:
+                    senders_by_provider[provider] = []
+                senders_by_provider[provider].append({
+                    "sender_name": sender["sender_name"],
+                    "phone_number": sender["phone_number"],
+                    "mobile_provider": provider,
+                    "full_name": sender_doc.get("full_name"),
+                    "date": sender_doc.get("date")
+                })
 
     data_pdf_ids = {}
     date_str = now.strftime("%d %B %Y")
@@ -142,23 +199,32 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
 
     suspension_pdf_id = generate_suspension_pdf(request_id, date_str) if senders_by_provider else None
 
+    # อัปเดต status ของ sender เฉพาะที่ส่งไป PDF
     for sender in pending_doc.get("senders", []):
         sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
-        if sender_doc and not (has_received_status(sender_doc) or sender_doc.get("reply_file_id")):
-            provider = sender_doc.get("mobile_provider", "unknown").lower()
-            sender_names.update_one(
-                {"_id": sender["sender_object_id"]},
-                {"$set": {
-                    "data_pdf_id": data_pdf_ids.get(provider, None),
-                    "pdf_sent_suspension_id": str(suspension_pdf_id) if suspension_pdf_id else None,
-                    "updated_at": now,
-                    "status": add_status(
-                        sender_doc.get("status", []),
-                        "suspension_requested",
-                        now
-                    )
-                }}
-            )
+        if sender_doc:
+            current_requests = sender_doc.get("request_ids", [])
+            request_status = None
+            for req in current_requests:
+                if req["id"] == request_id:
+                    request_status = req.get("status")
+                    break
+            
+            if request_status == "pending":
+                provider = sender_doc.get("mobile_provider", "unknown").lower()
+                sender_names.update_one(
+                    {"_id": sender["sender_object_id"]},
+                    {"$set": {
+                        "data_pdf_id": data_pdf_ids.get(provider, None),
+                        "pdf_sent_suspension_id": str(suspension_pdf_id) if suspension_pdf_id else None,
+                        "updated_at": now,
+                        "status": add_status(
+                            sender_doc.get("status", []),
+                            "suspension_requested",
+                            now
+                        )
+                    }}
+                )
 
     return {
         "message": f"อนุมัติ request {request_id} สำเร็จ",
