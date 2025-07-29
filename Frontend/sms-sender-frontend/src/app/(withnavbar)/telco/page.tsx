@@ -11,7 +11,8 @@ import {
   Send,
   RotateCcw,
   Trash2,
-  Eye
+  Eye,
+  Pause
 } from "lucide-react";
 import * as XLSX from 'xlsx';
 
@@ -67,6 +68,9 @@ export default function TelcoPage() {
   
   // Active view state
   const [expandedRequests, setExpandedRequests] = useState<Set<string>>(new Set());
+
+  // Track which senders are being suspended
+  const [suspendingSenders, setSuspendingSenders] = useState<Set<string>>(new Set());
 
   // Fetch data from API
   const fetchData = useCallback(async () => {
@@ -489,6 +493,57 @@ export default function TelcoPage() {
     }
   }, [session]);
 
+  // Complete suspension for a sender
+  const handleCompleteSuspension = useCallback(async (requestId: string, senderName: string) => {
+    if (!session?.user?.token) {
+      alert('❌ ไม่พบข้อมูลการเข้าสู่ระบบ');
+      return;
+    }
+
+    const confirmed = confirm(
+      `⚠️ ยืนยันการระงับสัญญาณ?\n\nRequest ID: ${requestId}\nSender Name: ${senderName}\n\nต้องการดำเนินการต่อหรือไม่?`
+    );
+    
+    if (!confirmed) return;
+
+    const suspensionKey = `${requestId}-${senderName}`;
+    setSuspendingSenders(prev => new Set([...prev, suspensionKey]));
+
+    try {
+      console.log(`🚫 Completing suspension for request ${requestId}, sender ${senderName}...`);
+      
+      const response = await fetch(`/api/request/complete-suspension/${requestId}/${encodeURIComponent(senderName)}`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.user.token}`,
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        console.log('✅ Suspension completed successfully:', result);
+        alert('✅ ระงับสัญญาณเรียบร้อยแล้ว');
+        
+        // Refresh data to reflect changes
+        await fetchData();
+      } else {
+        const error = await response.json();
+        console.error('❌ Suspension failed:', error);
+        alert(`❌ เกิดข้อผิดพลาดในการระงับสัญญาณ: ${error.message || 'Unknown error'}`);
+      }
+    } catch (error) {
+      console.error('💥 Suspension error:', error);
+      alert('❌ เกิดข้อผิดพลาดในการเชื่อมต่อ');
+    } finally {
+      setSuspendingSenders(prev => {
+        const updated = new Set(prev);
+        updated.delete(suspensionKey);
+        return updated;
+      });
+    }
+  }, [session, fetchData]);
+
   // Filter groups based on search
   const filteredGroups = requestGroups.filter(group =>
     searchTerm === '' || 
@@ -884,6 +939,27 @@ export default function TelcoPage() {
                                 </label>
                                 <p className="text-sm text-gray-900">{record.fullName || 'ไม่ระบุ'}</p>
                               </div>
+                            </div>
+
+                            {/* Suspension Button */}
+                            <div className="mt-4">
+                              <button
+                                onClick={() => handleCompleteSuspension(group.requestId, record.senderName)}
+                                disabled={suspendingSenders.has(`${group.requestId}-${record.senderName}`)}
+                                className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-2 rounded-lg hover:from-red-600 hover:to-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 text-sm shadow-md"
+                              >
+                                {suspendingSenders.has(`${group.requestId}-${record.senderName}`) ? (
+                                  <>
+                                    <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
+                                    กำลังระงับ...
+                                  </>
+                                ) : (
+                                  <>
+                                    <Pause className="h-3 w-3" />
+                                    🚫 ระงับสัญญาณแล้ว
+                                  </>
+                                )}
+                              </button>
                             </div>
 
                             {/* PDF Download Links */}
