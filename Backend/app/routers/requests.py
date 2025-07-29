@@ -1,7 +1,9 @@
 import datetime
+import re
+import unicodedata
 import pandas as pd
 from io import BytesIO
-from fastapi import APIRouter, HTTPException, Query, Depends, UploadFile, File
+from fastapi import APIRouter, HTTPException, Query, Depends, Response, UploadFile, File
 from typing import Optional, List
 from app.schemas.request import SenderRequest
 from app.utils.pdf import generate_custom_pdf_and_store, generate_suspension_pdf
@@ -36,6 +38,7 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
         "unknown": "nt"
     }
 
+    # Validation
     for row in data.rows:
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail="ต้องมี sender_name และ phone_number")
@@ -45,33 +48,79 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
         if mobile_provider not in valid_providers:
             raise HTTPException(status_code=400, detail=f"mobile_provider ต้องเป็นหนึ่งใน {', '.join(valid_providers)}")
 
+    # Process each row
     for row in data.rows:
         sender_name = clean_excel_data(str(row["sender_name"])).strip()
         phone_number = clean_excel_data(str(row["phone_number"])).strip()
         mobile_provider = provider_mapping.get(clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip(), "nt")
 
-        new_doc = {
-            "sender_name": sender_name,
-            "phone_number": phone_number,
-            "mobile_provider": mobile_provider,
-            "full_name": row.get("full_name"),
-            "date": row.get("date"),
-            "request_ids": [{"id": request_id, "status": "pending"}],
-            "fields": data.fields,
-            "status": [{"name": "pending", "updated_at": now}],
-            "created_by": current_user["id"],
-            "created_at": now,
-            "updated_at": now
-        }
-        result = sender_names.insert_one(new_doc)
-        sender_object_id = result.inserted_id
+        # ค้นหา sender_name ที่มีอยู่แล้ว (เอาตัวล่าสุด)
+        existing_sender = sender_names.find_one(
+            {"sender_name": sender_name}, 
+            sort=[("created_at", -1)]  # เอาตัวล่าสุด
+        )
+        
+        if existing_sender:
+            # ใช้ข้อมูลที่มีอยู่แล้ว โดยเพิ่ม request_id ใหม่เข้าไป
+            updated_request_ids = existing_sender.get("request_ids", [])
+            
+            # ตรวจสอบว่า request_id นี้มีอยู่แล้วหรือไม่
+            request_exists = any(req["id"] == request_id for req in updated_request_ids)
+            if not request_exists:
+                updated_request_ids.append({"id": request_id, "status": "pending"})
+            
+            # อัปเดต status ถ้าจำเป็น
+            current_status = existing_sender.get("status", [])
+            updated_status = current_status
+            
+            # เพิ่ม pending status ถ้ายังไม่มี
+            if is_status_object(current_status):
+                has_pending = any(s.get("name") == "pending" for s in current_status)
+                if not has_pending:
+                    updated_status = add_status(current_status, "pending", now)
+            else:
+                if "pending" not in current_status:
+                    updated_status = add_status(current_status, "pending", now)
 
+            # อัปเดต existing document
+            sender_names.update_one(
+                {"_id": existing_sender["_id"]},
+                {"$set": {
+                    "request_ids": updated_request_ids,
+                    "fields": data.fields,
+                    "status": updated_status,
+                    "updated_at": now
+                }}
+            )
+            
+            sender_object_id = existing_sender["_id"]
+            
+        else:
+            # สร้างใหม่เฉพาะเมื่อไม่เคยมี sender_name นี้มาก่อน
+            new_doc = {
+                "sender_name": sender_name,
+                "phone_number": phone_number,
+                "mobile_provider": mobile_provider,
+                "full_name": row.get("full_name"),
+                "date": row.get("date"),
+                "request_ids": [{"id": request_id, "status": "pending"}],
+                "fields": data.fields,
+                "status": [{"name": "pending", "updated_at": now}],
+                "created_by": current_user["id"],
+                "created_at": now,
+                "updated_at": now
+            }
+            result = sender_names.insert_one(new_doc)
+            sender_object_id = result.inserted_id
+
+        # เพิ่มลงใน sender_entries สำหรับ pending_requests
         sender_entries.append({
             "sender_name": sender_name,
             "phone_number": phone_number,
             "sender_object_id": sender_object_id
         })
 
+    # สร้าง pending request
     if sender_entries:
         pending_requests.insert_one({
             "request_id": request_id,
@@ -115,17 +164,27 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
     senders_by_provider = {}
     for sender in pending_doc.get("senders", []):
         sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
-        if sender_doc and not (has_received_status(sender_doc) or sender_doc.get("reply_file_id")):
-            provider = sender_doc.get("mobile_provider", "unknown").lower()
-            if provider not in senders_by_provider:
-                senders_by_provider[provider] = []
-            senders_by_provider[provider].append({
-                "sender_name": sender["sender_name"],
-                "phone_number": sender["phone_number"],
-                "mobile_provider": provider,
-                "full_name": sender_doc.get("full_name"),
-                "date": sender_doc.get("date")
-            })
+        if sender_doc:
+            # ตรวจสอบว่า sender นี้ยังไม่ได้รับการตอบกลับสำหรับ request_id นี้
+            current_requests = sender_doc.get("request_ids", [])
+            request_status = None
+            for req in current_requests:
+                if req["id"] == request_id:
+                    request_status = req.get("status")
+                    break
+            
+            # ถ้า request นี้ยังเป็น pending ให้ส่งไป PDF
+            if request_status == "pending":
+                provider = sender_doc.get("mobile_provider", "unknown").lower()
+                if provider not in senders_by_provider:
+                    senders_by_provider[provider] = []
+                senders_by_provider[provider].append({
+                    "sender_name": sender["sender_name"],
+                    "phone_number": sender["phone_number"],
+                    "mobile_provider": provider,
+                    "full_name": sender_doc.get("full_name"),
+                    "date": sender_doc.get("date")
+                })
 
     data_pdf_ids = {}
     date_str = now.strftime("%d %B %Y")
@@ -142,23 +201,32 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
 
     suspension_pdf_id = generate_suspension_pdf(request_id, date_str) if senders_by_provider else None
 
+    # อัปเดต status ของ sender เฉพาะที่ส่งไป PDF
     for sender in pending_doc.get("senders", []):
         sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
-        if sender_doc and not (has_received_status(sender_doc) or sender_doc.get("reply_file_id")):
-            provider = sender_doc.get("mobile_provider", "unknown").lower()
-            sender_names.update_one(
-                {"_id": sender["sender_object_id"]},
-                {"$set": {
-                    "data_pdf_id": data_pdf_ids.get(provider, None),
-                    "pdf_sent_suspension_id": str(suspension_pdf_id) if suspension_pdf_id else None,
-                    "updated_at": now,
-                    "status": add_status(
-                        sender_doc.get("status", []),
-                        "suspension_requested",
-                        now
-                    )
-                }}
-            )
+        if sender_doc:
+            current_requests = sender_doc.get("request_ids", [])
+            request_status = None
+            for req in current_requests:
+                if req["id"] == request_id:
+                    request_status = req.get("status")
+                    break
+            
+            if request_status == "pending":
+                provider = sender_doc.get("mobile_provider", "unknown").lower()
+                sender_names.update_one(
+                    {"_id": sender["sender_object_id"]},
+                    {"$set": {
+                        "data_pdf_id": data_pdf_ids.get(provider, None),
+                        "pdf_sent_suspension_id": str(suspension_pdf_id) if suspension_pdf_id else None,
+                        "updated_at": now,
+                        "status": add_status(
+                            sender_doc.get("status", []),
+                            "suspension_requested",
+                            now
+                        )
+                    }}
+                )
 
     return {
         "message": f"อนุมัติ request {request_id} สำเร็จ",
@@ -498,19 +566,77 @@ def get_my_requests(current_user: dict = Depends(get_current_user)):
 @router.get("/file/{file_id}")
 def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
     try:
-        file_obj = grid_fs.get(ObjectId(file_id))
-        temp_path = f"/tmp/{file_obj.filename}"
+        if not ObjectId.is_valid(file_id):
+            raise HTTPException(status_code=400, detail="รูปแบบ file_id ไม่ถูกต้อง")
         
-        with open(temp_path, 'wb') as f:
-            f.write(file_obj.read())
+        object_id = ObjectId(file_id)
         
-        if file_obj.filename.endswith('.pdf'):
-            media_type = 'application/pdf'
-        elif file_obj.filename.endswith('.xlsx'):
-            media_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        else:
-            media_type = 'text/csv'
+        if not grid_fs.exists(object_id):
+            raise HTTPException(status_code=404, detail="ไม่พบไฟล์ในระบบ")
         
-        return FileResponse(temp_path, media_type=media_type, filename=file_obj.filename)
-    except:
-        raise HTTPException(status_code=404, detail="ไม่พบไฟล์")
+        file_obj = grid_fs.get(object_id)
+        filename = file_obj.filename or f"file_{file_id}"
+        
+        file_content = file_obj.read()
+        
+        file_obj.close()
+        
+        if not file_content:
+            raise HTTPException(status_code=404, detail="ไฟล์ว่าง")
+        
+        content_type_map = {
+            '.pdf': 'application/pdf',
+            '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            '.xls': 'application/vnd.ms-excel',
+            '.csv': 'text/csv',
+            '.txt': 'text/plain',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.webp': 'image/webp',
+            '.bmp': 'image/bmp',
+            '.svg': 'image/svg+xml'
+        }
+        
+        file_ext = '.' + filename.split('.')[-1].lower() if '.' in filename else ''
+        media_type = content_type_map.get(file_ext, 'application/octet-stream')
+        
+        inline_types = {'.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'}
+        disposition = "inline" if file_ext in inline_types else "attachment"
+        
+        def make_safe_filename(name):
+            name = unicodedata.normalize('NFKD', name)
+            name = ''.join(c for c in name if ord(c) < 128)
+            name = re.sub(r'[^\w\s\-_\.]', '', name)
+            name = re.sub(r'\s+', '_', name)
+            return name.strip('_.')
+        
+        safe_filename = make_safe_filename(filename)
+        
+        if not safe_filename:
+            file_ext_safe = ''
+            if '.' in filename:
+                original_ext = filename.split('.')[-1]
+                if all(ord(c) < 128 for c in original_ext):
+                    file_ext_safe = f".{original_ext}"
+            safe_filename = f"download_{file_id}{file_ext_safe}"
+        
+        content_disposition = f"{disposition}; filename=\"{safe_filename}\""
+        
+        return Response(
+            content=file_content,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": content_disposition,
+                "Cache-Control": "no-cache"
+            }
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Error downloading file {file_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"เกิดข้อผิดพลาดในการดาวน์โหลดไฟล์: {str(e)}")
