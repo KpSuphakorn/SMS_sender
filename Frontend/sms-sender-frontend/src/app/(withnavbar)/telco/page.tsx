@@ -614,7 +614,7 @@ export default function TelcoPage() {
           {/* Header */}
           <div className="mb-8">
             <h1 className="text-4xl font-bold text-gray-900 mb-2">
-              🏢 ระบบจัดการข้อมูล Telco
+              ระบบจัดการข้อมูล Telco
             </h1>
             <p className="text-gray-600 text-lg">
               จัดการข้อมูลผู้ส่งข้อความจากผู้ให้บริการโทรคมนาคม
@@ -633,7 +633,7 @@ export default function TelcoPage() {
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400 h-5 w-5" />
               <input
                 type="text"
-                placeholder="🔍 ค้นหา Request ID, ชื่อผู้ส่ง, เบอร์โทร..."
+                placeholder="ค้นหา Request ID, ชื่อผู้ส่ง, เบอร์โทร..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="pl-10 pr-4 py-3 w-full border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-lg"
@@ -760,7 +760,7 @@ export default function TelcoPage() {
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
                           <h2 className="text-2xl font-bold text-gray-900">
-                            📋 Request ID: {group.requestId}
+                             Request ID: {group.requestId}
                           </h2>
                           <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
                             isSubmitted
@@ -773,8 +773,8 @@ export default function TelcoPage() {
                           </span>
                         </div>
                         <div className="flex flex-wrap gap-4 text-sm text-gray-600">
-                          <span>📊 รายการ: {group.records.length} รายการ</span>
-                          <span>👥 ผู้ให้บริการ: {group.records[0]?.mobileProvider}</span>
+                          <span> รายการ: {group.records.length} รายการ</span>
+                          <span> ผู้ให้บริการ: {group.records[0]?.mobileProvider}</span>
                         </div>
                       </div>
 
@@ -785,7 +785,7 @@ export default function TelcoPage() {
                           className="bg-gradient-to-r from-green-500 to-green-600 text-white px-4 py-2 rounded-lg hover:from-green-600 hover:to-green-700 transition-all flex items-center gap-2 shadow-md"
                         >
                           <Download className="h-4 w-4" />
-                          📥 ดาวน์โหลดเทมเพลต
+                          ดาวน์โหลดเทมเพลต
                         </button>
 
                         {/* Upload Excel */}
@@ -797,9 +797,9 @@ export default function TelcoPage() {
                               onChange={(e) => handleExcelUpload(group.requestId, e)}
                               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                             />
-                            <button className="bg-gradient-to-r from-blue-500 to-blue-600 text-white px-4 py-2 rounded-lg hover:from-blue-600 hover:to-blue-700 transition-all flex items-center gap-2 shadow-md">
+                            <button className="bg-gradient-to-r from-blue-500 to-blue-600 text-white px-4 py-2 rounded-lg hover:from-blue-600 hover:to-blue-800 transition-all flex items-center gap-2 shadow-md">
                               <Upload className="h-4 w-4" />
-                              📤 อัปโหลด Excel
+                              อัปโหลด Excel
                             </button>
                           </div>
                         )}
@@ -815,7 +815,7 @@ export default function TelcoPage() {
                             />
                             <button className="bg-gradient-to-r from-purple-500 to-purple-600 text-white px-4 py-2 rounded-lg hover:from-purple-600 hover:to-purple-700 transition-all flex items-center gap-2 shadow-md">
                               <Upload className="h-4 w-4" />
-                              📎 เอกสารแนบ
+                              เอกสารแนบ
                             </button>
                           </div>
                         )}
@@ -835,7 +835,7 @@ export default function TelcoPage() {
                             ) : (
                               <>
                                 <Send className="h-4 w-4" />
-                                🚀 ส่งข้อมูล
+                                ส่งข้อมูล
                               </>
                             )}
                           </button>
@@ -847,7 +847,7 @@ export default function TelcoPage() {
                           className="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors flex items-center gap-2"
                         >
                           <Eye className="h-4 w-4" />
-                          {isExpanded ? '🔼 ซ่อน' : '🔽 แสดง'}
+                          {isExpanded ? 'ซ่อน' : 'แสดง'}
                         </button>
                       </div>
                     </div>
@@ -857,7 +857,7 @@ export default function TelcoPage() {
                       <div className="mt-4 p-4 bg-blue-50 rounded-lg border border-blue-200">
                         <h4 className="font-semibold text-blue-900 mb-3 flex items-center gap-2">
                           <FileText className="h-4 w-4" />
-                          📁 ไฟล์ที่อัปโหลด
+                          ไฟล์ที่อัปโหลด
                         </h4>
                         <div className="space-y-2">
                           {/* Excel File */}
@@ -865,7 +865,7 @@ export default function TelcoPage() {
                             <div className="flex items-center justify-between bg-green-50 p-3 rounded-lg border border-green-200">
                               <div className="flex items-center gap-2 text-green-700">
                                 <CheckCircle2 className="h-4 w-4" />
-                                <span className="font-medium">📊 Excel: {files.excel.name}</span>
+                                <span className="font-medium">Excel: {files.excel.name}</span>
                                 {files.isValidated && <span className="text-xs bg-green-200 px-2 py-1 rounded-full">✅ ตรวจสอบแล้ว</span>}
                               </div>
                               {!isSubmitted && (
@@ -885,7 +885,7 @@ export default function TelcoPage() {
                             <div key={index} className="flex items-center justify-between bg-blue-50 p-3 rounded-lg border border-blue-200">
                               <div className="flex items-center gap-2 text-blue-700">
                                 <FileText className="h-4 w-4" />
-                                <span>📎 {file.name}</span>
+                                <span>{file.name}</span>
                               </div>
                               {!isSubmitted && (
                                 <button
@@ -908,7 +908,7 @@ export default function TelcoPage() {
                     <div className="p-6">
                       <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center gap-2">
                         <FileText className="h-5 w-5" />
-                        📋 รายละเอียดข้อมูล ({group.records.length} รายการ)
+                        รายละเอียดข้อมูล ({group.records.length} รายการ)
                       </h3>
                       <div className="grid gap-4">
                         {group.records.map((record, index) => (
@@ -953,7 +953,7 @@ export default function TelcoPage() {
                                 {suspendingSenders.has(`${group.requestId}-${record.senderName}`) ? (
                                   <>
                                     <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
-                                    กำลังระงับ...
+                                    กำลังดำเนินการ...
                                   </>
                                 ) : (
                                   <>
