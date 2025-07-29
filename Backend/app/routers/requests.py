@@ -224,8 +224,25 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
             if not sender_name or sender_name == 'nan':
                 continue
 
+            # Try to find sender by exact name first
             sender_entry = next((s for s in pending_doc["senders"] 
                                if s["sender_name"] == sender_name), None)
+            
+            # If not found and sender_name is numeric, try with leading zero
+            if not sender_entry and sender_name.isdigit():
+                sender_name_with_zero = "0" + sender_name
+                sender_entry = next((s for s in pending_doc["senders"] 
+                                   if s["sender_name"] == sender_name_with_zero), None)
+                if sender_entry:
+                    sender_name = sender_name_with_zero  # Use the corrected name
+            
+            # If still not found, try removing leading zero
+            if not sender_entry and sender_name.startswith("0") and sender_name[1:].isdigit():
+                sender_name_without_zero = sender_name[1:]
+                sender_entry = next((s for s in pending_doc["senders"] 
+                                   if s["sender_name"] == sender_name_without_zero), None)
+                if sender_entry:
+                    sender_name = sender_name_without_zero  # Use the corrected name
             
             if not sender_entry:
                 failed.append(sender_name)
@@ -240,6 +257,15 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
 
             excel_provider = clean_excel_data(str(row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", "unknown"))).lower()
             sender_provider = sender_doc.get("mobile_provider", "unknown").lower()
+            
+            # Debug logging
+            print(f"DEBUG - Processing sender: {sender_name}")
+            print(f"DEBUG - Excel provider: '{excel_provider}'")
+            print(f"DEBUG - Sender provider: '{sender_provider}'")
+            print(f"DEBUG - User role: '{user_role}'")
+            print(f"DEBUG - Excel == User: {excel_provider == user_role}")
+            print(f"DEBUG - Sender == User: {sender_provider == user_role}")
+            
             if excel_provider != user_role or sender_provider != user_role:
                 failed.append(f"{sender_name}: mobile_provider mismatch (Excel: {excel_provider}, Sender: {sender_provider}, Role: {user_role})")
                 continue

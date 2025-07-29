@@ -25,7 +25,7 @@ import {
 } from './api';
 
 // Import components
-import { TelcoAccessGuard } from './components';
+import { TelcoAccessGuard } from './components/TelcoAccessGuard';
 
 // Exact column headers that match the backend API
 const BACKEND_REQUIRED_HEADERS = {
@@ -154,6 +154,16 @@ export default function TelcoPage() {
     
     const data = generateExcelTemplate(group.records);
     const ws = XLSX.utils.aoa_to_sheet(data);
+    
+    // Format sender name column as text to preserve leading zeros
+    const senderNameColIndex = 0; // First column (หมายเลขที่แสดง/Sender Name)
+    for (let rowIndex = 1; rowIndex < data.length; rowIndex++) { // Skip header row
+      const cellRef = XLSX.utils.encode_cell({ r: rowIndex, c: senderNameColIndex });
+      if (ws[cellRef]) {
+        ws[cellRef].t = 's'; // Set cell type to string
+        ws[cellRef].z = '@'; // Set number format to text
+      }
+    }
     
     // Auto-size columns
     const columnWidths = data[0].map((_, colIndex) => {
@@ -308,6 +318,18 @@ export default function TelcoPage() {
     }
 
     console.log(`🚀 Submitting request ${requestId}...`);
+    
+    // Debug information
+    const currentGroup = requestGroups.find(g => g.requestId === requestId);
+    console.log('🔍 Debug info before submission:', {
+      requestId,
+      userRole: session?.user?.role,
+      mobileProvider: currentGroup?.records[0]?.mobileProvider,
+      recordCount: currentGroup?.records.length,
+      fileCount: [files.excel, ...files.attachments].length,
+      excelFileName: files.excel.name
+    });
+    
     setSubmittingRequests(prev => new Set([...prev, requestId]));
     
     try {
@@ -324,7 +346,8 @@ export default function TelcoPage() {
           requestId,
           successCount,
           failedCount,
-          details: result.data?.details
+          details: result.data?.details,
+          fullResponse: result.data
         });
 
         if (successCount > 0) {
@@ -333,7 +356,32 @@ export default function TelcoPage() {
           alert(`✅ ส่งข้อมูลสำเร็จ!\n\nสำเร็จ: ${successCount} รายการ${failedCount > 0 ? `\nไม่สำเร็จ: ${failedCount} รายการ` : ''}`);
           await fetchData();
         } else {
-          alert(`❌ การส่งข้อมูลไม่สำเร็จ!\n\nไม่สำเร็จ: ${failedCount} รายการ\n\nกรุณาตรวจสอบ:\n• บทบาทของคุณตรงกับผู้ให้บริการหรือไม่\n• ข้อมูลใน Excel ถูกต้องหรือไม่`);
+          // Get detailed error information
+          const currentGroup = requestGroups.find(g => g.requestId === requestId);
+          const userRole = session?.user?.role || 'ไม่ทราบ';
+          const mobileProvider = currentGroup?.records[0]?.mobileProvider || 'ไม่ทราบ';
+          
+          // Extract detailed failure information
+          const successfulItems = result.data?.details?.successful || [];
+          const failedItems = result.data?.details?.failed || [];
+          
+          console.error('❌ Submission failed details:', {
+            userRole,
+            mobileProvider,
+            successfulItems,
+            failedItems,
+            fullResponse: result.data
+          });
+          
+          let alertMessage = `❌ การส่งข้อมูลไม่สำเร็จ!\n\nไม่สำเร็จ: ${failedCount} รายการ\n\nรายละเอียด:\n• บทบาทผู้ใช้: ${userRole}\n• ผู้ให้บริการในข้อมูล: ${mobileProvider}`;
+          
+          if (failedItems.length > 0) {
+            alertMessage += `\n• รายการที่ไม่สำเร็จ: ${failedItems.slice(0, 3).join(', ')}${failedItems.length > 3 ? `... และอีก ${failedItems.length - 3} รายการ` : ''}`;
+          }
+          
+          alertMessage += `\n\nสาเหตุที่เป็นไปได้:\n• บทบาทของคุณ (${userRole}) ไม่ตรงกับผู้ให้บริการ (${mobileProvider})\n• ข้อมูลใน Excel ไม่ถูกต้องหรือไม่ครบถ้วน\n• รูปแบบไฟล์ Excel ไม่ถูกต้อง`;
+          
+          alert(alertMessage);
         }
       } else {
         console.error('❌ Submission failed:', result.error);
@@ -349,7 +397,7 @@ export default function TelcoPage() {
         return updated;
       });
     }
-  }, [uploadedFiles, session, fetchData, submittedRequests]);
+  }, [uploadedFiles, session, fetchData, submittedRequests, requestGroups]);
 
   // Submit all requests
   const submitAllRequests = useCallback(async () => {
