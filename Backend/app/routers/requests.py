@@ -229,11 +229,13 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
             
             if not sender_entry:
                 failed.append(sender_name)
+                print(f"Sender {sender_name} not found in pending request {request_id}")
                 continue
 
             sender_doc = sender_names.find_one({"_id": sender_entry["sender_object_id"]})
             if not sender_doc:
                 failed.append(sender_name)
+                print(f"Sender document for {sender_name} not found")
                 continue
 
             excel_provider = clean_excel_data(str(row.get("โครงข่ายที่ใช้งาน(โครงข่ายต้นทาง)", "unknown"))).lower()
@@ -296,6 +298,7 @@ async def isp_response(request_id: str, files: List[UploadFile] = File(...), cur
             
         except Exception as e:
             failed.append(f"{sender_name}: {str(e)}")
+            print(f"Error processing sender {sender_name}: {str(e)}")
 
     return {
         "message": f"ประมวลผล ISP response สำเร็จ",
