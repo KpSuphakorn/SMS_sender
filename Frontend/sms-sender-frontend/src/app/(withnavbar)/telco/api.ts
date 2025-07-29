@@ -118,6 +118,16 @@ export async function submitIspResponse(
 }
 
 /**
+ * Check if a sender is suspended
+ */
+export async function checkSenderSuspension(
+  senderName: string,
+  token?: string
+): Promise<{ success: boolean; data?: { is_suspended: boolean; sender_name: string }; error?: string }> {
+  return apiRequest<{ is_suspended: boolean; sender_name: string }>(`/check-suspension/${encodeURIComponent(senderName)}`, {}, token);
+}
+
+/**
  * Convert API sender data to frontend TelcoRecord format
  */
 export function convertApiDataToTelcoRecord(apiData: ApiSenderData): TelcoRecord {

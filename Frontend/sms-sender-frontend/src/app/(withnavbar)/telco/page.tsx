@@ -22,7 +22,8 @@ import {
   fetchIspPendingSenders,
   downloadFile,
   submitIspResponse,
-  convertApiDataToTelcoRecord
+  convertApiDataToTelcoRecord,
+  checkSenderSuspension
 } from './api';
 
 // Import components
@@ -72,6 +73,9 @@ export default function TelcoPage() {
   // Track which senders are being suspended
   const [suspendingSenders, setSuspendingSenders] = useState<Set<string>>(new Set());
 
+  // Track which senders are actually suspended (checked via API)
+  const [suspendedSenders, setSuspendedSenders] = useState<Set<string>>(new Set());
+
   // Fetch data from API
   const fetchData = useCallback(async () => {
     if (!session?.user?.token) {
@@ -108,6 +112,9 @@ export default function TelcoPage() {
         
         console.log(`✅ Data loaded: ${groups.length} request groups, ${groups.reduce((sum, g) => sum + g.records.length, 0)} total records`);
         setRequestGroups(groups);
+        
+        // Check suspension status for all senders
+        checkAllSendersSuspensionStatus(groups);
       } else {
         console.error('❌ API request failed:', result.error);
         setError(result.error || 'Failed to fetch data');
@@ -118,6 +125,38 @@ export default function TelcoPage() {
     } finally {
       setIsLoading(false);
     }
+  }, [session?.user?.token]);
+
+  // Check suspension status for all senders
+  const checkAllSendersSuspensionStatus = useCallback(async (groups: TelcoRequestGroup[]) => {
+    if (!session?.user?.token) return;
+
+    const allSenders = groups.flatMap(group => group.records.map(record => record.senderName));
+    const uniqueSenders = [...new Set(allSenders)];
+
+    console.log(`🔍 Checking suspension status for ${uniqueSenders.length} unique senders...`);
+
+    const suspensionChecks = await Promise.allSettled(
+      uniqueSenders.map(async (senderName) => {
+        try {
+          const result = await checkSenderSuspension(senderName, session.user.token);
+          return { senderName, isSuspended: result.success && result.data?.is_suspended };
+        } catch (error) {
+          console.error(`Error checking suspension for ${senderName}:`, error);
+          return { senderName, isSuspended: false };
+        }
+      })
+    );
+
+    const suspendedSenderNames = new Set<string>();
+    suspensionChecks.forEach((result) => {
+      if (result.status === 'fulfilled' && result.value.isSuspended) {
+        suspendedSenderNames.add(result.value.senderName);
+      }
+    });
+
+    console.log(`📊 Suspension check results: ${suspendedSenderNames.size} suspended out of ${uniqueSenders.length} total`);
+    setSuspendedSenders(suspendedSenderNames);
   }, [session?.user?.token]);
 
   // Load data on component mount
@@ -526,6 +565,17 @@ export default function TelcoPage() {
         const result = await response.json();
         console.log('✅ Suspension completed successfully:', result);
         alert('✅ ระงับสัญญาณเรียบร้อยแล้ว');
+        
+        // Check suspension status after completion
+        try {
+          const suspensionCheck = await checkSenderSuspension(senderName, session.user.token);
+          if (suspensionCheck.success && suspensionCheck.data?.is_suspended) {
+            console.log(`🔍 Confirmed: ${senderName} is now suspended`);
+            setSuspendedSenders(prev => new Set([...prev, senderName]));
+          }
+        } catch (checkError) {
+          console.error('Error checking suspension status:', checkError);
+        }
         
         // Refresh data to reflect changes
         await fetchData();
@@ -945,23 +995,33 @@ export default function TelcoPage() {
 
                             {/* Suspension Button */}
                             <div className="mt-4">
-                              <button
-                                onClick={() => handleCompleteSuspension(group.requestId, record.senderName)}
-                                disabled={suspendingSenders.has(`${group.requestId}-${record.senderName}`)}
-                                className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-2 rounded-lg hover:from-red-600 hover:to-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 text-sm shadow-md"
-                              >
-                                {suspendingSenders.has(`${group.requestId}-${record.senderName}`) ? (
-                                  <>
-                                    <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
-                                    กำลังดำเนินการ...
-                                  </>
-                                ) : (
-                                  <>
-                                    <Pause className="h-3 w-3" />
-                                    🚫 ระงับสัญญาณแล้ว
-                                  </>
-                                )}
-                              </button>
+                              {suspendedSenders.has(record.senderName) ? (
+                                <button
+                                  disabled={true}
+                                  className="bg-gray-400 text-white px-4 py-2 rounded-lg cursor-not-allowed transition-all flex items-center gap-2 text-sm shadow-md opacity-60"
+                                >
+                                  <CheckCircle2 className="h-3 w-3" />
+                                  ✅ ระงับแล้ว
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => handleCompleteSuspension(group.requestId, record.senderName)}
+                                  disabled={suspendingSenders.has(`${group.requestId}-${record.senderName}`)}
+                                  className="bg-gradient-to-r from-red-500 to-red-600 text-white px-4 py-2 rounded-lg hover:from-red-600 hover:to-red-700 disabled:opacity-50 disabled:cursor-not-allowed transition-all flex items-center gap-2 text-sm shadow-md"
+                                >
+                                  {suspendingSenders.has(`${group.requestId}-${record.senderName}`) ? (
+                                    <>
+                                      <div className="animate-spin rounded-full h-3 w-3 border-2 border-white border-t-transparent"></div>
+                                      กำลังดำเนินการ...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Pause className="h-3 w-3" />
+                                      🚫 ระงับสัญญาณ
+                                    </>
+                                  )}
+                                </button>
+                              )}
                             </div>
 
                             {/* PDF Download Links */}
