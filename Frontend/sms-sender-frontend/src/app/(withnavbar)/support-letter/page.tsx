@@ -4,6 +4,7 @@ import { useSession } from "next-auth/react";
 import { DatesRangeValue } from '@mantine/dates';
 import getPendingSenders from "@/libs/getPendingSenders";
 import approveRequest from "@/libs/approveRequest";
+import getApprovalStatus from "@/libs/getApprovalStatus";
 
 // Import types and utilities
 import { Book } from './types';
@@ -35,6 +36,7 @@ export default function SupportLetterPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [popoverOpened, setPopoverOpened] = useState(false);
   const [approvingRequests, setApprovingRequests] = useState<Set<string>>(new Set());
+  const [approvedRequests, setApprovedRequests] = useState<Set<string>>(new Set());
 
   // Helper function to map API status to display status
   const STATUS_ORDER = [
@@ -59,6 +61,44 @@ export default function SupportLetterPage() {
       done: present.has(s.key)
     }));
   };
+
+  // Function to check approval status for multiple request IDs
+  const checkApprovalStatusForRequests = useCallback(async (requestIds: string[]) => {
+    if (!session?.user?.token || requestIds.length === 0) return;
+
+    try {
+      console.log('🔍 Checking approval status for requests:', requestIds);
+      
+      const approvalChecks = await Promise.allSettled(
+        requestIds.map(async (requestId) => {
+          try {
+            const result = await getApprovalStatus(requestId, session.user.token);
+            return { requestId, isApproved: result.is_approved };
+          } catch (error) {
+            console.error(`Error checking approval for ${requestId}:`, error);
+            return { requestId, isApproved: false };
+          }
+        })
+      );
+
+      const approvedIds = new Set<string>();
+      approvalChecks.forEach((result) => {
+        if (result.status === 'fulfilled' && result.value.isApproved) {
+          approvedIds.add(result.value.requestId);
+        }
+      });
+
+      console.log('📊 Approval check results:', {
+        total: requestIds.length,
+        approved: approvedIds.size,
+        approvedIds: Array.from(approvedIds)
+      });
+
+      setApprovedRequests(approvedIds);
+    } catch (error) {
+      console.error('Error checking approval status:', error);
+    }
+  }, [session?.user?.token]);
 
   // Function to group cases by request_id and create books
   const processRawDataToBooks = useCallback((rawData: any[]): Book[] => {
@@ -165,7 +205,8 @@ export default function SupportLetterPage() {
         status: bookStatus,
         cases: processedCases,
         is_response_submitted: hasResponseSubmitted, // Track if any case has been responded to
-        canApprove: !hasResponseSubmitted // Can only approve if no responses have been submitted
+        canApprove: !hasResponseSubmitted, // Can only approve if no responses have been submitted
+        is_approved: false // Will be updated by approval status check
       };
       
       console.log(`✅ Created book:`, {
@@ -226,6 +267,12 @@ export default function SupportLetterPage() {
         
         setBooks(processedBooks);
         
+        // Check approval status for all request IDs
+        const requestIds = processedBooks.map(book => book.id);
+        if (requestIds.length > 0) {
+          await checkApprovalStatusForRequests(requestIds);
+        }
+        
       } catch (err) {
         console.error('Failed to fetch data:', err);
         setError('ไม่สามารถโหลดข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
@@ -235,7 +282,7 @@ export default function SupportLetterPage() {
     };
 
     fetchData();
-  }, [processRawDataToBooks, session?.user?.token]);
+  }, [processRawDataToBooks, session?.user?.token, checkApprovalStatusForRequests]);
 
   // Handle date range change
   const handleDateRangeChange = useCallback((range: DatesRangeValue) => {
@@ -276,15 +323,21 @@ export default function SupportLetterPage() {
       return;
     }
     
+    // Check if this book has been approved
+    if (approvedRequests.has(id)) {
+      alert('ไม่สามารถเลือกคำขอนี้ได้ เนื่องจากได้รับการอนุมัติแล้ว');
+      return;
+    }
+    
     setSelected((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
     );
   };
 
   const handleSelectAll = () => {
-    // Only include books that don't have responses submitted
+    // Only include books that don't have responses submitted and are not approved
     const selectableBookIds = filteredBooks
-      .filter(book => !book.is_response_submitted)
+      .filter(book => !book.is_response_submitted && !approvedRequests.has(book.id))
       .map(book => book.id);
     
     const allSelectableSelected = selectableBookIds.every(id => selected.includes(id));
@@ -328,6 +381,12 @@ export default function SupportLetterPage() {
       const processedBooks = processRawDataToBooks(casesWithRequestIds);
       setBooks(processedBooks);
       
+      // Check approval status for all request IDs
+      const requestIds = processedBooks.map(book => book.id);
+      if (requestIds.length > 0) {
+        await checkApprovalStatusForRequests(requestIds);
+      }
+      
     } catch (err) {
       console.error('Failed to refresh data:', err);
       setError('ไม่สามารถรีเฟรชข้อมูลได้ กรุณาลองใหม่อีกครั้ง');
@@ -350,13 +409,27 @@ export default function SupportLetterPage() {
     // Check if any selected books already have responses submitted
     const selectedBooks = books.filter(book => selected.includes(book.id));
     const booksWithResponses = selectedBooks.filter(book => book.is_response_submitted);
+    const alreadyApprovedBooks = selectedBooks.filter(book => approvedRequests.has(book.id));
     
-    if (booksWithResponses.length > 0) {
-      const responseMessage = booksWithResponses.length === selectedBooks.length
-        ? `ไม่สามารถอนุมัติได้ เนื่องจากคำขอทั้งหมดที่เลือกได้รับการตอบกลับจากผู้ให้บริการแล้ว:\n\n${booksWithResponses.map(b => b.id).join('\n')}`
-        : `ไม่สามารถอนุมัติคำขอดังต่อไปนี้ได้ เนื่องจากได้รับการตอบกลับจากผู้ให้บริการแล้ว:\n\n${booksWithResponses.map(b => b.id).join('\n')}\n\nกรุณาเลือกเฉพาะคำขอที่ยังไม่ได้รับการตอบกลับ`;
+    if (booksWithResponses.length > 0 || alreadyApprovedBooks.length > 0) {
+      let errorMessage = '';
       
-      alert(responseMessage);
+      if (alreadyApprovedBooks.length > 0) {
+        errorMessage += `ไม่สามารถอนุมัติคำขอดังต่อไปนี้ได้ เนื่องจากได้รับการอนุมัติแล้ว:\n\n${alreadyApprovedBooks.map(b => b.id).join('\n')}`;
+      }
+      
+      if (booksWithResponses.length > 0) {
+        if (errorMessage) errorMessage += '\n\n';
+        errorMessage += `ไม่สามารถอนุมัติคำขอดังต่อไปนี้ได้ เนื่องจากได้รับการตอบกลับจากผู้ให้บริการแล้ว:\n\n${booksWithResponses.map(b => b.id).join('\n')}`;
+      }
+      
+      if (alreadyApprovedBooks.length + booksWithResponses.length === selectedBooks.length) {
+        errorMessage += '\n\nกรุณาเลือกเฉพาะคำขอที่ยังไม่ได้รับการอนุมัติและยังไม่ได้รับการตอบกลับ';
+      } else {
+        errorMessage += '\n\nกรุณาเลือกเฉพาะคำขอที่ยังไม่ได้รับการอนุมัติและยังไม่ได้รับการตอบกลับ';
+      }
+      
+      alert(errorMessage);
       return;
     }
 
@@ -375,8 +448,26 @@ export default function SupportLetterPage() {
     try {
       const approvalResults = [];
       
-      // Approve each request sequentially
-      for (const requestId of requestIds) {
+      // Double-check approval status right before submitting
+      console.log('🔍 Double-checking approval status before submission...');
+      await checkApprovalStatusForRequests(requestIds);
+      
+      // Filter out any requests that became approved during the check
+      const stillSelectableIds = requestIds.filter(id => !approvedRequests.has(id));
+      
+      if (stillSelectableIds.length < requestIds.length) {
+        const alreadyApprovedIds = requestIds.filter(id => approvedRequests.has(id));
+        alert(`⚠️ ตรวจพบคำขอที่ได้รับการอนุมัติแล้ว:\n\n${alreadyApprovedIds.join('\n')}\n\nจะดำเนินการอนุมัติเฉพาะคำขอที่ยังไม่ได้รับการอนุมัติเท่านั้น`);
+      }
+      
+      if (stillSelectableIds.length === 0) {
+        alert('❌ ไม่มีคำขอที่สามารถอนุมัติได้ เนื่องจากทั้งหมดได้รับการอนุมัติแล้ว');
+        setSelected([]);
+        return;
+      }
+      
+      // Approve each remaining request sequentially
+      for (const requestId of stillSelectableIds) {
         try {
           console.log(`🔄 Approving request: ${requestId}`);
           const result = await approveRequest(requestId, session.user.token);
@@ -398,6 +489,11 @@ export default function SupportLetterPage() {
       
       if (successCount > 0 && failCount === 0) {
         alert(`✅ อนุมัติหนังสือสำเร็จ!\n\nจำนวนที่อนุมัติ: ${successCount} คำขอ`);
+        
+        // Add successful request IDs to approved requests set
+        const successfulIds = approvalResults.filter(r => r.success).map(r => r.requestId);
+        setApprovedRequests(prev => new Set([...prev, ...successfulIds]));
+        
         // Clear selection
         setSelected([]);
         // Refresh data to show updated status
@@ -416,6 +512,10 @@ export default function SupportLetterPage() {
         // Clear selection for successful ones
         const successfulIds = approvalResults.filter(r => r.success).map(r => r.requestId);
         setSelected(prev => prev.filter(id => !successfulIds.includes(id)));
+        
+        // Add successful request IDs to approved requests set
+        setApprovedRequests(prev => new Set([...prev, ...successfulIds]));
+        
         // Refresh data
         await handleRefresh();
       } else {
@@ -433,8 +533,8 @@ export default function SupportLetterPage() {
     }
   }, [selected, session?.user?.token, handleRefresh, books]);
 
-  // Computed values - only consider books that can be selected (haven't been responded to)
-  const selectableBooks = filteredBooks.filter(book => !book.is_response_submitted);
+  // Computed values - only consider books that can be selected (haven't been responded to and not approved)
+  const selectableBooks = filteredBooks.filter(book => !book.is_response_submitted && !approvedRequests.has(book.id));
   const allFilteredSelected = selectableBooks.length > 0 && selectableBooks.every(book => selected.includes(book.id));
 
   // Loading state
@@ -531,6 +631,7 @@ export default function SupportLetterPage() {
                 isSelected={selected.includes(book.id)}
                 onToggleSelect={() => handleCheck(book.id)}
                 onViewDetails={() => setModalBook(book)}
+                isApproved={approvedRequests.has(book.id)}
               />
             ))}
           </div>

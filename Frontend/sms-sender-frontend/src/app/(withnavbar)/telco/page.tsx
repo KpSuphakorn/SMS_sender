@@ -641,7 +641,7 @@ export default function TelcoPage() {
         <div className="min-h-screen bg-gradient-to-br from-blue-50 via-indigo-50 to-purple-50 flex items-center justify-center">
           <div className="text-center max-w-md">
             <AlertCircle className="h-16 w-16 text-red-500 mx-auto mb-4" />
-            <h2 className="text-2xl font-bold text-gray-900 mb-2">เกิดข้อผิดพลาด</h2>
+            <h2 className="text-2xl font-bold text-gray-900 mb-2">ยังไม่มีหนังสือขอข้อมูล</h2>
             <p className="text-gray-600 mb-6">{error}</p>
             <button
               onClick={fetchData}

@@ -37,6 +37,7 @@ export interface Book {
   cases: Case[];
   is_response_submitted?: boolean; // True if any case in this book has been responded to
   canApprove?: boolean; // True if this book can be approved (no responses submitted)
+  is_approved?: boolean; // True if this request has been approved
 }
 
 // Raw data interface from API

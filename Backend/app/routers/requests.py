@@ -616,6 +616,27 @@ def check_sender_suspension(sender_name: str, current_user: dict = Depends(get_c
         "sender_name": sender_name
     }
 
+@router.get("/get-approve-status/{request_id}")
+def get_approve_status(request_id: str, current_user: dict = Depends(get_current_user)):
+    """
+    Check if a request is approved by searching for 'is_approved' field in pending_requests collection
+    Returns: {"is_approved": true/false, "request_id": "request_id"}
+    """
+    pending_requests = pending_requests_collection()
+    
+    # Find the document with the given request_id
+    pending_doc = pending_requests.find_one({"request_id": request_id})
+    
+    if not pending_doc:
+        raise HTTPException(status_code=404, detail=f"ไม่พบ request {request_id}")
+    
+    is_approved = pending_doc.get("is_approved", False)
+    
+    return {
+        "is_approved": is_approved,
+        "request_id": request_id
+    }
+
 @router.get("/file/{file_id}")
 def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
     try:

@@ -7,6 +7,7 @@ import { formatDate, getProgressPercentage } from '../utils';
 interface BookCardProps {
   book: Book;
   isSelected: boolean;
+  isApproved: boolean; // New prop to indicate if the request is approved
   onToggleSelect: () => void;
   onViewDetails: () => void;
 }
@@ -14,6 +15,7 @@ interface BookCardProps {
 export const BookCard = ({
   book,
   isSelected,
+  isApproved,
   onToggleSelect,
   onViewDetails
 }: BookCardProps) => {
@@ -27,9 +29,11 @@ export const BookCard = ({
       className={`bg-white rounded-2xl shadow-lg border-2 transition-all duration-300 hover:shadow-xl hover:scale-[1.02] ${
         book.is_response_submitted 
           ? "border-green-500 bg-gradient-to-br from-green-50 to-emerald-50 shadow-green-200" 
-          : isSelected 
-            ? "border-blue-500 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-blue-200" 
-            : "border-gray-200 hover:border-gray-300"
+          : isApproved
+            ? "border-orange-500 bg-gradient-to-br from-orange-50 to-amber-50 shadow-orange-200"
+            : isSelected 
+              ? "border-blue-500 bg-gradient-to-br from-blue-50 to-indigo-50 shadow-blue-200" 
+              : "border-gray-200 hover:border-gray-300"
       }`}
     >
       {/* Response Submitted Banner */}
@@ -37,6 +41,15 @@ export const BookCard = ({
         <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white text-center py-2 rounded-t-xl">
           <div className="font-semibold text-sm">
             ✅ ได้รับการตอบกลับจากผู้ให้บริการแล้ว - ไม่สามารถอนุมัติซ้ำได้
+          </div>
+        </div>
+      )}
+      
+      {/* Approved Banner */}
+      {!book.is_response_submitted && isApproved && (
+        <div className="bg-gradient-to-r from-orange-500 to-amber-600 text-white text-center py-2 rounded-t-xl">
+          <div className="font-semibold text-sm">
+            📋 อนุมัติหนังสือแล้ว - ไม่สามารถอนุมัติซ้ำได้
           </div>
         </div>
       )}
@@ -69,13 +82,21 @@ export const BookCard = ({
                 type="checkbox"
                 checked={isSelected}
                 onChange={onToggleSelect}
-                disabled={book.is_response_submitted} // Disable selection if response submitted
+                disabled={book.is_response_submitted || isApproved} // Disable if response submitted or approved
                 className={`w-6 h-6 cursor-pointer rounded-lg ${
-                  book.is_response_submitted 
+                  book.is_response_submitted || isApproved
                     ? "accent-gray-400 cursor-not-allowed opacity-50" 
                     : "accent-blue-500"
                 }`}
               />
+              {/* Visual indicator overlay for disabled state */}
+              {(book.is_response_submitted || isApproved) && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <span className="text-xs font-bold text-gray-500">
+                    {book.is_response_submitted ? "✓" : isApproved ? "📋" : ""}
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         </div>
