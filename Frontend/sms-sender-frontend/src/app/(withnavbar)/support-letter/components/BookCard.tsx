@@ -1,8 +1,10 @@
 import { useState } from "react";
-import { Calendar, Users, Eye, ChevronDown, ChevronUp } from "lucide-react";
+import { Calendar, Users, Eye, ChevronDown, ChevronUp, Download } from "lucide-react";
+import { useSession } from "next-auth/react";
 import { Book } from '../types';
 import { STATUS_COLORS, STATUS_LABELS, TELCO_COLORS } from '../constants';
 import { formatDate, getProgressPercentage } from '../utils';
+import getSuspensionPdfId from "@/libs/getSuspensionPdfId";
 
 interface BookCardProps {
   book: Book;
@@ -19,10 +21,75 @@ export const BookCard = ({
   onToggleSelect,
   onViewDetails
 }: BookCardProps) => {
+  const { data: session } = useSession();
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
   const overallProgress = book.cases.length > 0 
     ? book.cases.reduce((acc, c) => acc + getProgressPercentage(c.statuses), 0) / book.cases.length 
     : 0;
+
+  const handleDownloadLetter = async () => {
+    if (!session?.user?.token) {
+      alert('ไม่พบข้อมูลการเข้าสู่ระบบ กรุณาเข้าสู่ระบบใหม่');
+      return;
+    }
+
+    if (!isApproved) {
+      alert('ไม่สามารถดาวน์โหลดหนังสือได้ เนื่องจากคำขอยังไม่ได้รับการอนุมัติ');
+      return;
+    }
+
+    try {
+      setIsDownloading(true);
+      
+      // Get the PDF ID for this request
+      const response = await getSuspensionPdfId(book.id, session.user.token);
+      const pdfId = response.pdf_sent_suspension_id;
+      
+      // Use backend URL to download the file with proper authentication
+      const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL;
+      const downloadUrl = `${BACKEND_URL}/api/file/${pdfId}`;
+      
+      // Create an authenticated fetch request to download the file
+      const fileResponse = await fetch(downloadUrl, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${session.user.token}`,
+        },
+      });
+
+      if (!fileResponse.ok) {
+        const errorData = await fileResponse.json();
+        throw new Error(errorData.detail || `HTTP error! status: ${fileResponse.status}`);
+      }
+
+      // Get the file blob
+      const blob = await fileResponse.blob();
+      
+      // Create a download link
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      
+      // Set filename - you can customize this
+      const filename = `suspension_letter_${book.id}.pdf`;
+      link.download = filename;
+      
+      // Trigger download
+      document.body.appendChild(link);
+      link.click();
+      
+      // Cleanup
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      
+    } catch (error) {
+      console.error('Error downloading letter:', error);
+      alert(`ไม่สามารถดาวน์โหลดหนังสือได้: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   return (
     <div
@@ -76,6 +143,18 @@ export const BookCard = ({
             >
               <Eye className="w-4 h-4" />
               <span className="font-medium">ดูรายละเอียด</span>
+            </button>
+            <button
+              onClick={handleDownloadLetter}
+              disabled={!isApproved || isDownloading}
+              className={`flex items-center space-x-2 px-5 py-2 rounded-xl transition-all duration-200 shadow-sm hover:shadow-md font-medium ${
+                isApproved && !isDownloading
+                  ? "bg-gradient-to-r from-green-100 to-emerald-200 hover:from-green-200 hover:to-emerald-300 text-green-700"
+                  : "bg-gray-100 text-gray-400 cursor-not-allowed"
+              }`}
+            >
+              <Download className="w-4 h-4" />
+              <span>{isDownloading ? "กำลังดาวน์โหลด..." : "ดาวน์โหลดหนังสือ"}</span>
             </button>
             <div className="relative">
               <input

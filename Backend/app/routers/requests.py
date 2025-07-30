@@ -637,6 +637,47 @@ def get_approve_status(request_id: str, current_user: dict = Depends(get_current
         "request_id": request_id
     }
 
+@router.get("/get-suspension-pdf-id/{request_id}")
+def get_suspension_pdf_id(request_id: str, current_user: dict = Depends(get_current_user)):
+    """
+    Get the pdf_sent_suspension_id for a given request_id
+    Returns: {"pdf_sent_suspension_id": "file_id", "request_id": "request_id"}
+    """
+    pending_requests = pending_requests_collection()
+    sender_names = sender_names_collection()
+    
+    # Find the pending request document
+    pending_doc = pending_requests.find_one({"request_id": request_id})
+    
+    if not pending_doc:
+        raise HTTPException(status_code=404, detail=f"ไม่พบ request {request_id}")
+    
+    # Get the first sender's object_id from the senders array
+    senders = pending_doc.get("senders", [])
+    if not senders:
+        raise HTTPException(status_code=404, detail=f"ไม่พบ senders ใน request {request_id}")
+    
+    sender_object_id = senders[0].get("sender_object_id")
+    if not sender_object_id:
+        raise HTTPException(status_code=404, detail=f"ไม่พบ sender_object_id ใน request {request_id}")
+    
+    # Find the sender_names document using the object_id
+    sender_doc = sender_names.find_one({"_id": sender_object_id})
+    
+    if not sender_doc:
+        raise HTTPException(status_code=404, detail=f"ไม่พบ sender document สำหรับ request {request_id}")
+    
+    # Get the pdf_sent_suspension_id
+    pdf_sent_suspension_id = sender_doc.get("pdf_sent_suspension_id")
+    
+    if not pdf_sent_suspension_id:
+        raise HTTPException(status_code=404, detail=f"ไม่พบ pdf_sent_suspension_id สำหรับ request {request_id}")
+    
+    return {
+        "pdf_sent_suspension_id": pdf_sent_suspension_id,
+        "request_id": request_id
+    }
+
 @router.get("/file/{file_id}")
 def download_file(file_id: str, current_user: dict = Depends(get_current_user)):
     try:
