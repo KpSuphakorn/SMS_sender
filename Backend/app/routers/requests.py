@@ -25,6 +25,8 @@ THAILAND_TZ = pytz.timezone('Asia/Bangkok')
 
 @router.post("/store-sender-collection")
 async def store_sender_collection(data: SenderRequest, current_user: dict = Depends(get_current_user)):
+    from pymongo import UpdateOne, InsertOne
+    
     sender_names = sender_names_collection()
     pending_requests = pending_requests_collection()
     request_id = generate_request_id()
@@ -43,27 +45,54 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
         "unknown": "nt"
     }
 
-    # Validation
+    # Validation and pre-process data
+    processed_rows = []
     for row in data.rows:
         if not row.get("sender_name") or not row.get("phone_number"):
             raise HTTPException(status_code=400, detail="ต้องมี sender_name และ phone_number")
+        
+        sender_name = clean_excel_data(str(row["sender_name"])).strip()
+        phone_number = clean_excel_data(str(row["phone_number"])).strip()
         mobile_provider = clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip()
         mobile_provider = provider_mapping.get(mobile_provider, 'telco')
 
         if mobile_provider not in valid_providers:
             raise HTTPException(status_code=400, detail=f"mobile_provider ต้องเป็นหนึ่งใน {', '.join(valid_providers)}")
+        
+        processed_rows.append({
+            "sender_name": sender_name,
+            "phone_number": phone_number,
+            "mobile_provider": mobile_provider,
+            "full_name": row.get("full_name"),
+            "date": row.get("date"),
+            "original_row": row
+        })
 
-    # Process each row
-    for row in data.rows:
-        sender_name = clean_excel_data(str(row["sender_name"])).strip()
-        phone_number = clean_excel_data(str(row["phone_number"])).strip()
-        mobile_provider = provider_mapping.get(clean_excel_data(str(row.get("mobile_provider", "unknown"))).lower().strip(), "nt")
+    # Batch fetch all existing senders in a single query
+    sender_names_list = [row["sender_name"] for row in processed_rows]
+    existing_senders = list(sender_names.find(
+        {"sender_name": {"$in": sender_names_list}},
+        sort=[("created_at", -1)]
+    ))
+    
+    # Create a lookup dict for existing senders (latest per sender_name)
+    existing_lookup = {}
+    for sender in existing_senders:
+        sender_name = sender["sender_name"]
+        if sender_name not in existing_lookup:
+            existing_lookup[sender_name] = sender
 
-        # ค้นหา sender_name ที่มีอยู่แล้ว (เอาตัวล่าสุด)
-        existing_sender = sender_names.find_one(
-            {"sender_name": sender_name}, 
-            sort=[("created_at", -1)]  # เอาตัวล่าสุด
-        )
+    # Prepare bulk operations
+    bulk_updates = []
+    bulk_inserts = []
+    
+    # Process each row with optimized logic
+    for row in processed_rows:
+        sender_name = row["sender_name"]
+        phone_number = row["phone_number"]
+        mobile_provider = row["mobile_provider"]
+        
+        existing_sender = existing_lookup.get(sender_name)
         
         if existing_sender:
             # ใช้ข้อมูลที่มีอยู่แล้ว โดยเพิ่ม request_id ใหม่เข้าไป
@@ -87,15 +116,17 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
                 if "pending" not in current_status:
                     updated_status = add_status(current_status, "pending", now)
 
-            # อัปเดต existing document
-            sender_names.update_one(
-                {"_id": existing_sender["_id"]},
-                {"$set": {
-                    "request_ids": updated_request_ids,
-                    "fields": data.fields,
-                    "status": updated_status,
-                    "updated_at": now
-                }}
+            # Add to bulk updates
+            bulk_updates.append(
+                UpdateOne(
+                    {"_id": existing_sender["_id"]},
+                    {"$set": {
+                        "request_ids": updated_request_ids,
+                        "fields": data.fields,
+                        "status": updated_status,
+                        "updated_at": now
+                    }}
+                )
             )
             
             sender_object_id = existing_sender["_id"]
@@ -115,15 +146,32 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
                 "created_at": now,
                 "updated_at": now
             }
-            result = sender_names.insert_one(new_doc)
-            sender_object_id = result.inserted_id
+            bulk_inserts.append(new_doc)
+            # We'll get the ObjectId after bulk insert
+            sender_object_id = None
 
         # เพิ่มลงใน sender_entries สำหรับ pending_requests
         sender_entries.append({
             "sender_name": sender_name,
             "phone_number": phone_number,
-            "sender_object_id": sender_object_id
+            "sender_object_id": sender_object_id  # Will be None for new docs, filled later
         })
+
+    # Execute bulk operations
+    inserted_ids = []
+    if bulk_updates:
+        sender_names.bulk_write(bulk_updates, ordered=False)
+    
+    if bulk_inserts:
+        result = sender_names.insert_many(bulk_inserts, ordered=False)
+        inserted_ids = result.inserted_ids
+
+    # Fill in the missing sender_object_ids for new documents
+    insert_index = 0
+    for i, entry in enumerate(sender_entries):
+        if entry["sender_object_id"] is None:
+            entry["sender_object_id"] = inserted_ids[insert_index]
+            insert_index += 1
 
     # สร้าง pending request
     if sender_entries:
