@@ -548,32 +548,134 @@ def complete_suspension(request_id: str, sender_name: str, current_user: dict = 
 @router.get("/available-senders")
 def get_available_senders(start: Optional[str] = Query(None), end: Optional[str] = Query(None)):
     sender_names = sender_names_collection()
-    response_from_telco = response_from_telco_collection()
-    query = {}
+    match_stage = {}
     
     if start:
         try:
             start_date = datetime.datetime.strptime(start, "%Y-%m-%d")
-            query["updated_at"] = {"$gte": start_date}
+            match_stage["updated_at"] = {"$gte": start_date}
         except ValueError:
             raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง ใช้ YYYY-MM-DD")
     
     if end:
         try:
             end_date = datetime.datetime.strptime(end, "%Y-%m-%d")
-            if "updated_at" in query:
-                query["updated_at"]["$lte"] = end_date
+            if "updated_at" in match_stage:
+                match_stage["updated_at"]["$lte"] = end_date
             else:
-                query["updated_at"] = {"$lte": end_date}
+                match_stage["updated_at"] = {"$lte": end_date}
         except ValueError:
             raise HTTPException(status_code=400, detail="รูปแบบวันที่ไม่ถูกต้อง ใช้ YYYY-MM-DD")
     
-    results = [
-        format_sender_doc(doc, include_telco_data=True, response_from_telco=response_from_telco, include_pdf_ids=True)
-        for doc in sender_names.find(query, {"_id": 0})
+    # Use aggregation pipeline to join collections in a single query
+    pipeline = [
+        {"$match": match_stage},
+        {
+            "$lookup": {
+                "from": "response_from_telco",
+                "let": {
+                    "sender_name": "$sender_name",
+                    "phone_number": "$phone_number",
+                    "request_ids": "$request_ids"
+                },
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    {"$eq": ["$sender_name", "$$sender_name"]},
+                                    {"$eq": ["$phone_number", "$$phone_number"]},
+                                    {"$in": ["$request_id", {"$map": {"input": "$$request_ids", "as": "req", "in": "$$req.id"}}]}
+                                ]
+                            }
+                        }
+                    }
+                ],
+                "as": "telco_responses"
+            }
+        },
+        {
+            "$addFields": {
+                "telco_response": {"$arrayElemAt": ["$telco_responses", 0]}
+            }
+        },
+        {"$project": {"_id": 0, "telco_responses": 0}}
     ]
     
+    # Execute aggregation and format results
+    cursor = sender_names.aggregate(pipeline)
+    results = []
+    
+    for doc in cursor:
+        # Format the document directly instead of calling format_sender_doc for each one
+        formatted_doc = _format_sender_doc_optimized(doc)
+        results.append(formatted_doc)
+    
     return clean_nan_values(results)
+
+def _format_sender_doc_optimized(doc):
+    """Optimized version of format_sender_doc that works with aggregated data."""
+    status = doc.get("status", [])
+    if not is_status_object(status):
+        status = [{"name": s, "updated_at": doc.get("updated_at", datetime.datetime.now())} for s in status]
+    
+    latest_request_id = [req["id"] for req in doc.get("request_ids", [])][-1] if doc.get("request_ids") else None
+    latest_status_name = next((s["name"] for s in status[-1:]), None)
+    
+    status_descriptions = {
+        "pending": "รอข้อมูลจาก กสทช",
+        "suspension_requested": "รอการระงับสัญญาณ", 
+        "received": "ได้รับข้อมูลจาก กสทช",
+        "suspended": "ระงับสัญญาณสำเร็จ",
+        "skipped": "ข้ามคำขอ (มีข้อมูลอยู่แล้ว)",
+        "error": "เกิดข้อผิดพลาด"
+    }
+    
+    base_data = {
+        "sender_name": doc["sender_name"],
+        "phone_number": doc["phone_number"],
+        "mobile_provider": doc.get("mobile_provider"),
+        "full_name": doc.get("full_name"),
+        "date": doc["updated_at"].strftime("%d %B %Y") if doc.get("updated_at") else None,
+        "sender_created_date": doc.get("date"),
+        "status": [
+            {"name": s["name"], "updated_at": s["updated_at"].strftime("%d %B %Y %H:%M")} 
+            for s in status
+        ],
+        "latest_request_id": latest_request_id,
+        "request_ids": [
+            {"id": req["id"], "status": req.get("status", "unknown")}
+            for req in doc.get("request_ids", [])
+        ],
+        "latest_request_status": next((req["status"] for req in doc.get("request_ids", []) if req["id"] == latest_request_id), None),
+        "status_description": status_descriptions.get(latest_status_name, "ไม่ทราบสถานะ"),
+        "created_at": doc["created_at"],
+        "updated_at": doc["updated_at"]
+    }
+    
+    # Handle telco data from aggregated result
+    telco_response = doc.get("telco_response")
+    if telco_response:
+        telco_data = clean_nan_values(telco_response.get("data", {}))
+        all_reply_file_ids = [str(file_id) for file_id in telco_response.get("all_reply_file_ids", [])]
+        
+        base_data.update({
+            "data": telco_data,
+            "all_reply_file_ids": all_reply_file_ids
+        })
+    else:
+        base_data.update({
+            "data": {},
+            "all_reply_file_ids": []
+        })
+    
+    # Add PDF IDs
+    base_data.update({
+        "pdf_sent_data_id": str(doc.get("pdf_sent_data_id", "")),
+        "pdf_sent_suspension_id": str(doc.get("pdf_sent_suspension_id", ""))
+    })
+    
+    return base_data
 
 @router.get("/my-requests")
 def get_my_requests(current_user: dict = Depends(get_current_user)):
