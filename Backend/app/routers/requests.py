@@ -192,6 +192,8 @@ async def store_sender_collection(data: SenderRequest, current_user: dict = Depe
 
 @router.post("/approve-request/{request_id}")
 async def approve_request(request_id: str, current_user: dict = Depends(get_current_user)):
+    from pymongo import UpdateOne
+    
     check_admin(current_user)
     
     pending_requests = pending_requests_collection()
@@ -214,9 +216,19 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
         }}
     )
 
+    # Batch fetch all sender documents in a single query
+    sender_object_ids = [sender["sender_object_id"] for sender in pending_doc.get("senders", [])]
+    sender_docs = list(sender_names.find({"_id": {"$in": sender_object_ids}}))
+    
+    # Create lookup for sender documents
+    sender_lookup = {doc["_id"]: doc for doc in sender_docs}
+    
+    # Process senders and prepare for bulk operations
     senders_by_provider = {}
+    bulk_updates = []
+    
     for sender in pending_doc.get("senders", []):
-        sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
+        sender_doc = sender_lookup.get(sender["sender_object_id"])
         if sender_doc:
             # ตรวจสอบว่า sender นี้ยังไม่ได้รับการตอบกลับสำหรับ request_id นี้
             current_requests = sender_doc.get("request_ids", [])
@@ -239,6 +251,7 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
                     "date": sender_doc.get("date")
                 })
 
+    # Generate PDFs
     data_pdf_ids = {}
     date_str = now.strftime("%d %B %Y")
     for provider, senders in senders_by_provider.items():
@@ -254,9 +267,9 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
 
     suspension_pdf_id = generate_suspension_pdf(request_id, date_str) if senders_by_provider else None
 
-    # อัปเดต status ของ sender เฉพาะที่ส่งไป PDF
+    # Prepare bulk updates for sender status
     for sender in pending_doc.get("senders", []):
-        sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
+        sender_doc = sender_lookup.get(sender["sender_object_id"])
         if sender_doc:
             current_requests = sender_doc.get("request_ids", [])
             request_status = None
@@ -267,19 +280,27 @@ async def approve_request(request_id: str, current_user: dict = Depends(get_curr
             
             if request_status == "pending":
                 provider = sender_doc.get("mobile_provider", "unknown").lower()
-                sender_names.update_one(
-                    {"_id": sender["sender_object_id"]},
-                    {"$set": {
-                        "data_pdf_id": data_pdf_ids.get(provider, None),
-                        "pdf_sent_suspension_id": str(suspension_pdf_id) if suspension_pdf_id else None,
-                        "updated_at": now,
-                        "status": add_status(
-                            sender_doc.get("status", []),
-                            "suspension_requested",
-                            now
-                        )
-                    }}
+                
+                # Add to bulk updates instead of individual update_one calls
+                bulk_updates.append(
+                    UpdateOne(
+                        {"_id": sender["sender_object_id"]},
+                        {"$set": {
+                            "data_pdf_id": data_pdf_ids.get(provider, None),
+                            "pdf_sent_suspension_id": str(suspension_pdf_id) if suspension_pdf_id else None,
+                            "updated_at": now,
+                            "status": add_status(
+                                sender_doc.get("status", []),
+                                "suspension_requested",
+                                now
+                            )
+                        }}
+                    )
                 )
+
+    # Execute bulk updates
+    if bulk_updates:
+        sender_names.bulk_write(bulk_updates, ordered=False)
 
     return {
         "message": f"อนุมัติ request {request_id} สำเร็จ",
