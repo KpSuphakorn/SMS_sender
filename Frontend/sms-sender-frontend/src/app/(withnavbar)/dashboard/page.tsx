@@ -1,12 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-<<<<<<< HEAD
-import { useSession } from "next-auth/react";
-import { Pie, Bar, Line } from "react-chartjs-2";
-=======
 import { Pie, Bar } from "react-chartjs-2";
->>>>>>> seen2
 import {
   Chart as ChartJS,
   ArcElement,
@@ -20,15 +15,7 @@ import { MantineProvider } from '@mantine/core';
 import { CheckCircle, Clock, AlertCircle, Download } from "lucide-react";
 import '@mantine/core/styles.css';
 
-<<<<<<< HEAD
-// Import API functions
-import getPendingRequests from "@/libs/getPendingRequests";
-import approveRequest from "@/libs/approveRequest";
-
-ChartJS.register(ArcElement, Tooltip, Legend, BarElement, CategoryScale, LinearScale, LineElement, PointElement);
-=======
 ChartJS.register(ArcElement, Tooltip, Legend, BarElement, CategoryScale, LinearScale);
->>>>>>> seen2
 
 // ใช้ interfaces ที่คุณมีอยู่
 interface CaseData {
@@ -80,74 +67,9 @@ interface DailyNewCasesData {
 }
 
 export default function Dashboard() {
-<<<<<<< HEAD
-  const { data: session } = useSession();
-  const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null);
-  const [dateRange, setDateRange] = useState<[Date | null, Date | null]>([
-    new Date(), // Today: July 1, 2025
-    new Date()  // Today: July 1, 2025
-  ]);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const [highValueFilter, setHighValueFilter] = useState<boolean>(false);
-  const [overdueFilter, setOverdueFilter] = useState<"waiting_3days" | "sent_7days" | null>(null);
-  
-  // New states for pending requests
-  const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
-  const [isLoadingRequests, setIsLoadingRequests] = useState(false);
-  const [approvingRequests, setApprovingRequests] = useState<Set<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-
-  // Fetch pending requests
-  const fetchPendingRequests = useCallback(async () => {
-    if (!session?.user?.token) return;
-    
-    setIsLoadingRequests(true);
-    setError(null);
-    
-    try {
-      const result = await getPendingRequests(session.user.token);
-      setPendingRequests(result);
-    } catch (err) {
-      console.error('Error fetching pending requests:', err);
-      setError(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการโหลดข้อมูล');
-    } finally {
-      setIsLoadingRequests(false);
-    }
-  }, [session?.user?.token]);
-
-  // Load pending requests on component mount
-  useEffect(() => {
-    fetchPendingRequests();
-  }, [fetchPendingRequests]);
-
-  // Approve request function
-  const handleApproveRequest = useCallback(async (requestId: string) => {
-    if (!session?.user?.token) return;
-    
-    setApprovingRequests(prev => new Set([...prev, requestId]));
-    
-    try {
-      await approveRequest(requestId, session.user.token);
-      // Refresh pending requests after approval
-      await fetchPendingRequests();
-      alert(`อนุมัติคำขอ ${requestId} สำเร็จ`);
-    } catch (err) {
-      console.error('Error approving request:', err);
-      alert(err instanceof Error ? err.message : 'เกิดข้อผิดพลาดในการอนุมัติ');
-    } finally {
-      setApprovingRequests(prev => {
-        const updated = new Set(prev);
-        updated.delete(requestId);
-        return updated;
-      });
-    }
-  }, [session?.user?.token, fetchPendingRequests]);
-=======
   // State: ลบ state ที่เกี่ยวข้องกับการโต้ตอบของผู้ใช้ออก
   // const [selectedNetwork, setSelectedNetwork] = useState<string | null>(null); // ลบออก
   // const [selectedDate, setSelectedDate] = useState<string | null>(null); // ลบออก
->>>>>>> seen2
 
   // State สำหรับข้อมูลจริงที่ดึงจาก Backend
   const [cases, setCases] = useState<CaseData[]>([]);
@@ -352,207 +274,8 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-<<<<<<< HEAD
-          </div>
-
-          <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-lg">
-            <div className="flex items-center">
-              <div className="text-blue-400 text-2xl mr-3">💰</div>
-              <div>
-                <p className="text-sm text-blue-800 font-medium">ความเสียหายรวม</p>
-                <p className="text-2xl font-bold text-blue-900">{dailyLoss.toLocaleString()}</p>
-              </div>
-            </div>
-          </div>
-
-          <div 
-            className="bg-green-50 border-l-4 border-green-400 p-4 rounded-lg cursor-pointer hover:bg-green-100"
-            onClick={() => setStatusFilter(statusFilter === "data_received" ? "all" : "data_received")}
-          >
-            <div className="flex items-center">
-              <div className="text-green-400 text-2xl mr-3">✅</div>
-              <div>
-                <p className="text-sm text-green-800 font-medium">ได้รับข้อมูลแล้ว</p>
-                <p className="text-2xl font-bold text-green-900">{totalReceived}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Status Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
-          <div 
-            className="bg-white rounded-xl shadow-md p-6 text-center cursor-pointer hover:bg-gray-50"
-            onClick={() => setStatusFilter(statusFilter === "all" ? "all" : "all")}
-          >
-            <div className="text-blue-500 text-3xl mb-2">📊</div>
-            <div className="text-sm font-medium text-gray-600 mb-1">เคสทั้งหมด</div>
-            <div className="text-2xl font-bold text-gray-900">{totalCases}</div>
-          </div>
-
-          <div 
-            className="bg-white rounded-xl shadow-md p-6 text-center cursor-pointer hover:bg-gray-50"
-            onClick={() => setStatusFilter(statusFilter === "waiting_approval" ? "all" : "waiting_approval")}
-          >
-            <div className="text-yellow-500 text-3xl mb-2">⏳</div>
-            <div className="text-sm font-medium text-gray-600 mb-1">รออนุมัติ</div>
-            <div className="text-2xl font-bold text-gray-900">{totalWaiting}</div>
-          </div>
-
-          <div 
-            className="bg-white rounded-xl shadow-md p-6 text-center cursor-pointer hover:bg-gray-50"
-            onClick={() => setStatusFilter(statusFilter === "sent_to_nbtc" ? "all" : "sent_to_nbtc")}
-          >
-            <div className="text-blue-500 text-3xl mb-2">📤</div>
-            <div className="text-sm font-medium text-gray-600 mb-1">ส่งไป กสทช.</div>
-            <div className="text-2xl font-bold text-gray-900">{totalSent}</div>
-          </div>
-
-          <div 
-            className="bg-white rounded-xl shadow-md p-6 text-center cursor-pointer hover:bg-gray-50"
-            onClick={() => setHighValueFilter(!highValueFilter)}
-          >
-            <div className="text-red-500 text-3xl mb-2">🚨</div>
-            <div className="text-sm font-medium text-gray-600 mb-1">เคสมูลค่าสูง</div>
-            <div className="text-2xl font-bold text-gray-900">{highValueCases}</div>
-            <div className="text-xs text-gray-500">≥ 10,000 บาท</div>
-          </div>
-        </div>
-
-        {/* Admin Approval Section */}
-        {session?.user?.role === 'admin' && (
-          <div className="mb-8">
-            <div className="bg-white p-6 rounded-xl shadow-lg">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-xl font-semibold text-gray-800 flex items-center">
-                  <Clock className="h-6 w-6 mr-2 text-orange-500" />
-                  คำขอรออนุมัติ
-                </h2>
-                <button
-                  onClick={fetchPendingRequests}
-                  disabled={isLoadingRequests}
-                  className="bg-blue-500 text-white px-4 py-2 rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors"
-                >
-                  {isLoadingRequests ? 'กำลังโหลด...' : 'รีเฟรช'}
-                </button>
-              </div>
-
-              {error && (
-                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded mb-4">
-                  {error}
-                </div>
-              )}
-
-              {pendingRequests.length === 0 ? (
-                <div className="text-center py-12 text-gray-500">
-                  <CheckCircle className="h-16 w-16 mx-auto mb-4 text-gray-300" />
-                  <p>ไม่มีคำขอรออนุมัติ</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {pendingRequests
-                    .filter(req => !req.is_approved)
-                    .map((request) => (
-                    <div key={request.request_id} className="border border-gray-200 rounded-lg p-4 hover:bg-gray-50 transition-colors">
-                      <div className="flex items-center justify-between mb-3">
-                        <div>
-                          <h3 className="text-lg font-medium text-gray-900">
-                            Request ID: {request.request_id}
-                          </h3>
-                          <p className="text-sm text-gray-600">
-                            สร้างเมื่อ: {new Date(request.created_at).toLocaleDateString('th-TH', {
-                              year: 'numeric',
-                              month: 'long',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit'
-                            })}
-                          </p>
-                        </div>
-                        <button
-                          onClick={() => handleApproveRequest(request.request_id)}
-                          disabled={approvingRequests.has(request.request_id)}
-                          className="bg-green-500 text-white px-6 py-2 rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center gap-2"
-                        >
-                          {approvingRequests.has(request.request_id) ? (
-                            <>
-                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                              กำลังอนุมัติ...
-                            </>
-                          ) : (
-                            <>
-                              <CheckCircle className="h-4 w-4" />
-                              อนุมัติ
-                            </>
-                          )}
-                        </button>
-                      </div>
-
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <h4 className="text-sm font-medium text-gray-700 mb-2">
-                          รายการผู้ส่ง ({request.senders.length} รายการ):
-                        </h4>
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                          {request.senders.slice(0, 6).map((sender, index) => (
-                            <div key={index} className="bg-white rounded p-2 text-xs">
-                              <div className="font-medium text-gray-900">
-                                {sender.sender_name}
-                              </div>
-                              <div className="text-gray-600">
-                                {sender.phone_number}
-                              </div>
-                              <div className="text-gray-500">
-                                {sender.mobile_provider}
-                              </div>
-                            </div>
-                          ))}
-                          {request.senders.length > 6 && (
-                            <div className="bg-gray-100 rounded p-2 text-xs text-center text-gray-600 flex items-center justify-center">
-                              +{request.senders.length - 6} รายการ
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* Charts */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <h2 className="text-lg font-semibold text-gray-800 mb-4">
-              การแจกแจงตามเครือข่าย {selectedNetwork && `(${selectedNetwork})`}
-            </h2>
-            <div className="h-64">
-              <Pie data={networkDistribution} options={pieOptions} />
-            </div>
-            <p className="text-xs text-gray-500 mt-2 text-center">คลิกเพื่อกรองข้อมูล</p>
-          </div>
-
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <h2 className="text-lg font-semibold text-gray-800 mb-4">เคสใหม่ต่อวัน</h2>
-            <div className="h-64">
-              <Bar data={dailyNewCases} options={barOptions} />
-            </div>
-            <p className="text-xs text-gray-500 mt-2 text-center">คลิกเพื่อกรองตามวัน</p>
-          </div>
-
-          <div className="bg-white p-6 rounded-xl shadow-lg">
-            <h2 className="text-lg font-semibold text-gray-800 mb-4">แนวโน้มความเสียหาย</h2>
-            <div className="h-64">
-              <Line data={lossHistory} options={lineOptions} />
-            </div>
-            <p className="text-xs text-gray-500 mt-2 text-center">คลิกเพื่อกรองตามวันที่</p>
-          </div>
-        </div>
-=======
           </>
         )}
->>>>>>> seen2
       </div>
     </MantineProvider>
   );
