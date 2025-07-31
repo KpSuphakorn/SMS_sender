@@ -462,23 +462,110 @@ async def get_pending_senders(current_user: dict = Depends(get_current_user)):
     sender_names = sender_names_collection()
     response_from_telco = response_from_telco_collection()
     
-    pending_docs = pending_requests.find({})
-    results = []
+    # Get all pending requests
+    pending_docs = list(pending_requests.find({}))
+    if not pending_docs:
+        return clean_nan_values([])
+    
+    # Collect all sender_object_ids from all pending requests
+    all_sender_object_ids = []
+    pending_lookup = {}  # Map sender_object_id to pending request info
     
     for pending_doc in pending_docs:
+        request_id = pending_doc["request_id"]
+        is_approved = pending_doc.get("is_approved", False)
+        
         for sender in pending_doc.get("senders", []):
-            sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
-            if sender_doc:
-                formatted_doc = format_sender_doc(
-                    sender_doc,
-                    include_telco_data=True,
-                    response_from_telco=response_from_telco,
-                    include_pdf_ids=True
-                )
-                formatted_doc["request_id"] = pending_doc["request_id"]
-                formatted_doc["is_approved"] = pending_doc.get("is_approved", False)
-                formatted_doc["is_response_submitted"] = bool(sender_doc.get("reply_file_id"))
-                results.append(formatted_doc)
+            sender_object_id = sender["sender_object_id"]
+            all_sender_object_ids.append(sender_object_id)
+            pending_lookup[sender_object_id] = {
+                "request_id": request_id,
+                "is_approved": is_approved
+            }
+    
+    # Batch fetch all sender documents in a single query
+    sender_docs = list(sender_names.find(
+        {"_id": {"$in": all_sender_object_ids}}
+    ))
+    
+    if not sender_docs:
+        return clean_nan_values([])
+    
+    # Collect all sender names and phone numbers for telco data lookup
+    sender_identifiers = []
+    sender_request_ids = []
+    for doc in sender_docs:
+        sender_identifiers.append({
+            "sender_name": doc["sender_name"],
+            "phone_number": doc["phone_number"]
+        })
+        # Get all request_ids for this sender
+        for req in doc.get("request_ids", []):
+            sender_request_ids.append(req["id"])
+    
+    # Batch fetch all telco responses in a single query
+    telco_responses = list(response_from_telco.find({
+        "$or": [
+            {
+                "sender_name": identifier["sender_name"],
+                "phone_number": identifier["phone_number"]
+            }
+            for identifier in sender_identifiers
+        ] + [
+            {"request_id": {"$in": sender_request_ids}}
+        ]
+    }))
+    
+    # Create lookup for telco responses
+    telco_lookup = {}
+    for response in telco_responses:
+        key = f"{response.get('sender_name')}_{response.get('phone_number')}"
+        if key not in telco_lookup:
+            telco_lookup[key] = []
+        telco_lookup[key].append(response)
+    
+    # Process results
+    results = []
+    for doc in sender_docs:
+        sender_object_id = doc["_id"]
+        pending_info = pending_lookup.get(sender_object_id)
+        
+        if pending_info:
+            # Create a mock response_from_telco collection for format_sender_doc
+            class MockCollection:
+                def __init__(self, responses):
+                    self.responses = responses
+                
+                def find_one(self, query):
+                    sender_name = query.get("sender_name")
+                    phone_number = query.get("phone_number")
+                    request_ids = query.get("request_id", {}).get("$in", [])
+                    
+                    key = f"{sender_name}_{phone_number}"
+                    responses = self.responses.get(key, [])
+                    
+                    # Find matching response
+                    for response in responses:
+                        if not request_ids or response.get("request_id") in request_ids:
+                            return response
+                    return None
+            
+            mock_telco_collection = MockCollection(telco_lookup)
+            
+            # Format the document using the existing function
+            formatted_doc = format_sender_doc(
+                doc,
+                include_telco_data=True,
+                response_from_telco=mock_telco_collection,
+                include_pdf_ids=True
+            )
+            
+            # Add pending request specific fields
+            formatted_doc["request_id"] = pending_info["request_id"]
+            formatted_doc["is_approved"] = pending_info["is_approved"]
+            formatted_doc["is_response_submitted"] = bool(doc.get("reply_file_id"))
+            
+            results.append(formatted_doc)
 
     return clean_nan_values(results)
 
