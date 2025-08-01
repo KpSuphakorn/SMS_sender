@@ -601,20 +601,114 @@ async def get_isp_pending_senders(current_user: dict = Depends(get_current_user)
     if user_role not in valid_roles:
         raise HTTPException(status_code=403, detail="ต้องมี role เป็น true, dtac, ais, nt, หรือ telco")
 
-    pending_docs = pending_requests.find({"is_approved": True})
+    # Get all approved pending requests
+    pending_docs = list(pending_requests.find({"is_approved": True}))
+    if not pending_docs:
+        return clean_nan_values({})
+    
+    # Collect all sender_object_ids and build request mapping
+    all_sender_object_ids = []
+    request_sender_mapping = {}  # Map request_id to list of sender_object_ids
+    
+    for pending_doc in pending_docs:
+        request_id = pending_doc["request_id"]
+        request_sender_mapping[request_id] = []
+        
+        for sender in pending_doc.get("senders", []):
+            sender_object_id = sender["sender_object_id"]
+            all_sender_object_ids.append(sender_object_id)
+            request_sender_mapping[request_id].append(sender_object_id)
+    
+    # Batch fetch all sender documents in a single query
+    sender_docs = list(sender_names.find(
+        {"_id": {"$in": all_sender_object_ids}}
+    ))
+    
+    if not sender_docs:
+        return clean_nan_values({})
+    
+    # Filter sender docs by user role and create lookup
+    filtered_sender_docs = []
+    sender_lookup = {}
+    
+    for doc in sender_docs:
+        if doc.get("mobile_provider", "unknown").lower() == user_role:
+            filtered_sender_docs.append(doc)
+            sender_lookup[doc["_id"]] = doc
+    
+    if not filtered_sender_docs:
+        return clean_nan_values({})
+    
+    # Collect all sender names, phone numbers, and request_ids for telco data lookup
+    sender_identifiers = []
+    sender_request_ids = []
+    
+    for doc in filtered_sender_docs:
+        sender_identifiers.append({
+            "sender_name": doc["sender_name"],
+            "phone_number": doc["phone_number"]
+        })
+        # Get all request_ids for this sender
+        for req in doc.get("request_ids", []):
+            sender_request_ids.append(req["id"])
+    
+    # Batch fetch all telco responses in a single query
+    telco_responses = list(response_from_telco.find({
+        "$or": [
+            {
+                "sender_name": identifier["sender_name"],
+                "phone_number": identifier["phone_number"]
+            }
+            for identifier in sender_identifiers
+        ] + [
+            {"request_id": {"$in": sender_request_ids}}
+        ]
+    }))
+    
+    # Create lookup for telco responses
+    telco_lookup = {}
+    for response in telco_responses:
+        key = f"{response.get('sender_name')}_{response.get('phone_number')}"
+        if key not in telco_lookup:
+            telco_lookup[key] = []
+        telco_lookup[key].append(response)
+    
+    # Create a mock response_from_telco collection for format_sender_doc
+    class MockCollection:
+        def __init__(self, responses):
+            self.responses = responses
+        
+        def find_one(self, query):
+            sender_name = query.get("sender_name")
+            phone_number = query.get("phone_number")
+            request_ids = query.get("request_id", {}).get("$in", [])
+            
+            key = f"{sender_name}_{phone_number}"
+            responses = self.responses.get(key, [])
+            
+            # Find matching response
+            for response in responses:
+                if not request_ids or response.get("request_id") in request_ids:
+                    return response
+            return None
+    
+    mock_telco_collection = MockCollection(telco_lookup)
+    
+    # Build results by request_id
     results_by_request_id = {}
     
     for pending_doc in pending_docs:
         request_id = pending_doc["request_id"]
         results_by_request_id[request_id] = []
         
-        for sender in pending_doc.get("senders", []):
-            sender_doc = sender_names.find_one({"_id": sender["sender_object_id"]})
-            if sender_doc and sender_doc.get("mobile_provider", "unknown").lower() == user_role:
+        for sender_object_id in request_sender_mapping[request_id]:
+            sender_doc = sender_lookup.get(sender_object_id)
+            if sender_doc:
+                # Format the document using the existing function with mock collection
                 formatted_doc = format_sender_doc(
                     sender_doc,
                     include_telco_data=True,
-                    response_from_telco=response_from_telco,
+                    response_from_telco=mock_telco_collection,
                     include_pdf_ids=True
                 )
                 formatted_doc["request_id"] = request_id
@@ -622,6 +716,7 @@ async def get_isp_pending_senders(current_user: dict = Depends(get_current_user)
                 formatted_doc["is_response_submitted"] = bool(sender_doc.get("reply_file_id"))
                 results_by_request_id[request_id].append(formatted_doc)
     
+    # Remove empty request_ids
     results_by_request_id = {k: v for k, v in results_by_request_id.items() if v}
     
     return clean_nan_values(results_by_request_id)
